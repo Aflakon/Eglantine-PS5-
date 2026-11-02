@@ -15,6 +15,7 @@ static std::uint64_t last_polled_frame{};
 static std::uint64_t pending_nonce{};
 static unsigned pending_frames{};
 static std::atomic<bool> semaphore_enabled{};
+static std::atomic<bool> vulkan_handoff_enabled{};
 // Diagnostic43: exercise range-local mapping updates during initial loading.
 static std::atomic<bool> mapping_enabled{true};
 static std::array<std::atomic<std::uint64_t>,2> mapping_operations{};
@@ -110,6 +111,18 @@ static void Export(Capture& c, const char* folder = "/data/eglantineps5/logs") {
 
 void Frame(std::uint64_t frame, std::uint64_t ns) {
     if (frame % 10 == 0) {
+        const char* handoff_path = "/data/homebrew/PPSA98515/mkw-handoff-mode.txt";
+        if (FILE* mode = std::fopen(handoff_path, "r")) {
+            unsigned value{};
+            if (std::fscanf(mode, "%u", &value) == 1 && value <= 1) {
+                vulkan_handoff_enabled.store(value != 0, std::memory_order_release);
+                std::printf("MKW_HANDOFF_MODE frame=%llu mode=%u\n",
+                    static_cast<unsigned long long>(frame), value);
+            }
+            std::fclose(mode);
+            std::remove(handoff_path);
+        }
+
         const char* direct_path = "/data/homebrew/PPSA98515/mkw-mapped-mode.txt";
         if (FILE* mode = std::fopen(direct_path, "r")) {
             unsigned value{};
@@ -293,4 +306,8 @@ extern "C" void eden_mapped_readback_result(std::uint64_t direct, std::uint64_t 
 
 extern "C" void eden_mapped_readback_reject(unsigned reason) {
     if (reason < 4) Eden::OrderedReadTrace::mapped_rejections[reason].fetch_add(1);
+}
+
+extern "C" bool eden_vulkan_handoff_enabled() {
+    return Eden::OrderedReadTrace::vulkan_handoff_enabled.load(std::memory_order_acquire);
 }

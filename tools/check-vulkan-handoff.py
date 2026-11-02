@@ -35,6 +35,8 @@ code = r'''
 #include <utility>
 #include <vector>
 using namespace std::chrono_literals;
+inline bool handoff_enabled = true;
+extern "C" bool eden_vulkan_handoff_enabled() { return handoff_enabled; }
 struct MkwWorkerTimer {};
 namespace VideoCommon {
 namespace LoadingProbe { struct Probe { void Mark(const char*) {} }; inline Probe gpu; }
@@ -82,6 +84,8 @@ struct Scheduler {
 code += '\n'.join(method(name) for name in ['WaitWorker', 'DispatchWork', 'WorkerThread'])
 code += r'''
 int main() {
+    for (unsigned mode = 0; mode < 2; ++mode) {
+    handoff_enabled = mode;
     for (unsigned cycle = 0; cycle < 20; ++cycle) {
         Scheduler scheduler;
         std::binary_semaphore entered{0}, release{0}, final_entered{0}, final_release{0};
@@ -112,10 +116,11 @@ int main() {
         assert(drain.wait_for(5s) == std::future_status::ready);
         drain.get();
         assert(completed == count);
-        assert(scheduler.drain_cv.notifications == 1);
+        assert(scheduler.drain_cv.notifications == (mode ? 1u : count + 2));
         scheduler.WaitWorker(); // already empty: no notification required
         scheduler.worker_thread.request_stop();
         scheduler.worker_thread.join(); // blocked worker's stop-aware wait must wake
+    }
     }
 }
 '''
@@ -125,4 +130,4 @@ with tempfile.TemporaryDirectory(prefix='vulkan-handoff-') as temp:
     subprocess.run(['clang++-18', '-std=c++20', '-O1', '-g', '-pthread',
                     '-fsanitize=address,undefined', str(p / 'check.cpp'), '-o', str(p / 'check')], check=True)
     subprocess.run([str(p / 'check')], check=True, timeout=30)
-print('Vulkan handoff PASS: 60000 FIFO commands, queue drain versus execution, one drain wake per burst, empty waits and stopped-worker wake')
+print('Vulkan handoff PASS: 120000 FIFO commands in both notification modes, queue drain versus execution, one drain wake per burst, empty waits and stopped-worker wake')

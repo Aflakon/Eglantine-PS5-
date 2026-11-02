@@ -795,11 +795,11 @@ adapt('src/video_core/renderer_vulkan/vk_scheduler.h',
 adapt('src/video_core/renderer_vulkan/vk_scheduler.cpp', 'vulkan_scheduler.cpp', [
     ('        event_cv.wait(ql, [this] { return work_queue.empty(); });',
      '        ++drain_waiters;\n        drain_cv.wait(ql, [this] { return work_queue.empty(); });\n        --drain_waiters;'),
-    ('            event_cv.notify_all();', '            event_cv.notify_one();'),
+    ('            event_cv.notify_all();', '            if (eden_vulkan_handoff_enabled()) event_cv.notify_one();\n            else event_cv.notify_all();'),
     ('        work_queue.pop();\n        event_cv.notify_all();',
-     '        work_queue.pop();\n        if (work_queue.empty() && drain_waiters) drain_cv.notify_all();'),
+     '        work_queue.pop();\n        if (!eden_vulkan_handoff_enabled() || (work_queue.empty() && drain_waiters)) drain_cv.notify_all();'),
 
-    ('#include <memory>', '#include <memory>\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include "dev_vulkan.h"'),
+    ('#include <memory>', '#include <memory>\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include "dev_vulkan.h"\nextern "C" bool eden_vulkan_handoff_enabled();'),
     ('namespace Vulkan {\n', 'namespace Vulkan {\n' + GPU_TIME_HELPERS),
     ('        .pInheritanceInfo = nullptr,\n    });\n    current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());',
      '        .pInheritanceInfo = nullptr,\n    });\n    GpuTimeBegin(device, current_cmdbuf);\n'
