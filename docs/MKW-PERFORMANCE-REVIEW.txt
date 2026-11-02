@@ -101,7 +101,8 @@ Heap stress (including ThreadSanitizer), targeted GPU completion and staging
 reclamation checks passed. The release hot-path check intentionally remains
 failing because the accumulated draft retains experimental timers. The host
 startup fixture now expects six progress slots and excludes the PS5 sampler
-on non-PS5 hosts. See the PR description for the native build/check result.
+on non-PS5 hosts. Related CPU/JIT sampling arrays were also expanded to six
+slots to fix an out-of-bounds read exposed by this fixture. See the PR description for the native build/check result.
 
 AI assistance
 Implementation, analysis, review preparation and this report were assisted
