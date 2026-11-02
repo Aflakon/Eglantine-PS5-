@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <string>
+#include <charconv>
+#include <filesystem>
+#ifdef PS5_NATIVE
+#include "native_directory.h"
+#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -25,13 +30,38 @@ inline std::uint64_t ExtractedTitleID(const std::string& npdm) {
     return title;
 }
 
-// Keep the library key at the game root; the loader combines versioned updates with base.
+// Keep the library key at the game root. A complete extracted update can also
+// be the only installed layer; the loader combines all available versioned layers.
 inline std::string ExtractedGameMain(const std::string& root) {
     for (const char* suffix : {"/base/exefs/main", "/exefs/main"}) {
         const std::string path = root + suffix;
         struct stat info {};
         if (stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode)) return path;
     }
-    return {};
+    const std::string updates = root + "/updates";
+    struct stat info {};
+    if (stat(updates.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) return {};
+    std::error_code error;
+    std::string newest;
+    std::uint64_t newest_version{};
+#ifdef PS5_NATIVE
+    const auto entries = ReadNativeDirectory(updates, error);
+#else
+    const auto entries = std::filesystem::directory_iterator(updates, error);
+#endif
+    if (error) return {};
+    for (const auto& entry : entries) {
+        const auto name = entry.path().filename().string();
+        std::uint64_t version{};
+        const auto parsed = std::from_chars(name.data(), name.data() + name.size(), version);
+        if (name.empty() || parsed.ec != std::errc{} || parsed.ptr != name.data() + name.size()) continue;
+        const auto main = entry.path().string() + "/exefs/main";
+        if (stat(main.c_str(), &info) == 0 && S_ISREG(info.st_mode) &&
+            (newest.empty() || version > newest_version)) {
+            newest = main;
+            newest_version = version;
+        }
+    }
+    return newest;
 }
 }

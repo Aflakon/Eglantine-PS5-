@@ -68,6 +68,25 @@ int main(int argc, char** argv) {
     assert(Eden::ExtractedTitleID(npdm_path.string()) == 0);
     aci = 0xfffffff0; std::memcpy(npdm.data() + 0x70, &aci, 4); write_npdm();
     assert(Eden::ExtractedTitleID(npdm_path.string()) == 0);
+    // A complete versioned dump can have updates but no base executable.
+    const auto only = fs::path(argv[1]) / "UpdateOnly";
+    for (const char* version : {"9", "10", "327680", "999bad", "18446744073709551616"}) {
+        fs::create_directories(only / "updates" / version / "exefs");
+        std::ofstream(only / "updates" / version / "exefs/main") << version;
+    }
+    fs::create_directories(only / "updates/655360"); // incomplete update, no executable
+    assert(Eden::ExtractedGameMain(only.string()) == (only / "updates/327680/exefs/main").string());
+    const auto only_exefs = std::make_shared<FileSys::Directory>(FileSys::Directory{only / "updates/327680/exefs"});
+    auto only_layers = ExtractedLayers(only_exefs);
+    assert(only_layers.size() == 4 && only_layers[0]->GetName() == "655360");
+    assert(only_layers[1]->GetName() == "327680" && only_layers[2]->GetName() == "10");
+    fs::create_directories(only / "base"); // empty base is also a supported layout
+    assert(Eden::ExtractedGameMain(only.string()) == (only / "updates/327680/exefs/main").string());
+    only_layers = ExtractedLayers(only_exefs);
+    assert(only_layers.size() == 5 && only_layers.back()->GetName() == "base");
+    fs::create_directories(only / "base/exefs");
+    std::ofstream(only / "base/exefs/main") << "base";
+    assert(Eden::ExtractedGameMain(only.string()) == (only / "base/exefs/main").string());
     // Existing direct ExeFS games stay independent of similarly named sibling updates.
     const fs::path direct = fs::path(argv[1]) / "Direct";
     fs::create_directories(direct / "exefs");
@@ -84,4 +103,4 @@ with tempfile.TemporaryDirectory(prefix='eglantine-extracted-') as temporary:
     cpp.write_text(program)
     subprocess.run(['g++', '-std=c++20', '-I' + str(root / 'headless'), str(cpp), '-o', str(executable)], check=True)
     subprocess.run([str(executable), str(folder)], check=True)
-print('Extracted content: direct/base layouts, numeric update precedence, invalid versions, missing games and NPDM offsets/truncation PASS')
+print('Extracted content: direct/base/update-only layouts, numeric update precedence, invalid versions, missing games and NPDM offsets/truncation PASS')
