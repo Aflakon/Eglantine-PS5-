@@ -3,19 +3,9 @@ namespace {
 // of each upload+graphics submission, summed once the GPU has run it and printed every
 // 5 s as EDEN_GPU_TIME. Probe/counters are worker-thread-only. Origin is captured on
 // the recording thread, then copied into the submission command.
-struct GpuSubmitOrigin {
-    const void* caller{};
-    bool finish{};
-};
-thread_local GpuSubmitOrigin gpu_submit_origin;
-struct GpuSubmitOriginScope {
-    GpuSubmitOrigin saved{};
-    bool enabled{::Eden::DevVulkan::gpu_time};
-    GpuSubmitOriginScope(const void* caller, bool finish) {
-        if (enabled) saved = std::exchange(gpu_submit_origin, GpuSubmitOrigin{caller, finish});
-    }
-    ~GpuSubmitOriginScope() { if (enabled) gpu_submit_origin = saved; }
-};
+using ::Eden::VulkanProbe::GpuSubmitOrigin;
+using ::Eden::VulkanProbe::gpu_submit_origin;
+using ::Eden::VulkanProbe::GpuSubmitOriginScope;
 struct GpuTimeProbe {
     static constexpr u32 SLOTS = 512;
     vk::QueryPool pool;

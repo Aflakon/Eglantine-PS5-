@@ -5816,6 +5816,64 @@ index 8bcc2f7a76..be1107e1bb 100644
      return true;
  }
  
+diff --git a/src/video_core/fence_manager.h b/src/video_core/fence_manager.h
+index f4873ffc13..6d975a0464 100644
+--- a/src/video_core/fence_manager.h
++++ b/src/video_core/fence_manager.h
+@@ -27,6 +27,7 @@
+ #include "video_core/host1x/syncpoint_manager.h"
+ #include "video_core/nx2_profile.h"
+ #include "video_core/rasterizer_interface.h"
++#include "video_core/readback_diagnostics.h"
+ 
+ namespace VideoCommon {
+ 
+@@ -85,8 +86,9 @@ public:
+         if constexpr (!can_async_check) {
+             TryReleasePendingFences<false>();
+         }
+-        auto [should_flush, committed_flushes] = CommitCacheFlushes();
++        auto [should_flush, committed_flushes, required_flushes] = CommitCacheFlushes();
+         if (!delay_fence && committed_flushes == 0 && SkipEmptyFence()) {
++            ReadbackDiagnostics::CountFence(0, true);
+             Nx2Profile::Scope skipped_scope{Nx2Profile::Zone::FenceSkipped};
+             gpu.BeginAsyncGuestWrite();
+             SCOPE_EXIT { gpu.EndAsyncGuestWrite(); };
+@@ -95,7 +97,9 @@ public:
+             return;
+         }
+         skipped_fences = 0;
+-        should_flush |= query_cache.HasUncommittedFlushes();
++        const bool query_flush = query_cache.HasUncommittedFlushes();
++        should_flush |= query_flush;
++        ReadbackDiagnostics::CountFence(required_flushes | (query_flush ? 4 : 0));
+         query_cache.CommitAsyncFlushes();
+         TFence new_fence = CreateFence(!should_flush);
+         if constexpr (can_async_check) {
+@@ -330,6 +334,7 @@ private:
+     struct CacheFlushes {
+         bool should_flush;  ///< Downloads to wait for: the fence must reach the host GPU
+         u8 committed;       ///< TextureFlushes, BufferFlushes: the caches that committed downloads
++        u8 required;        ///< The caches that requested device completion before committing
+     };
+ 
+     /// Commits the texture and buffer caches' downloads for a new fence (the query cache's are
+@@ -343,6 +348,7 @@ private:
+         {
+             std::scoped_lock lock{texture_cache.mutex};
+             flushes.should_flush = texture_cache.HasUncommittedFlushes();
++            if (flushes.should_flush) flushes.required |= TextureFlushes;
+             if (texture_cache.HasAsyncFlushWork()) {
+                 texture_cache.CommitAsyncFlushes();
+                 flushes.committed |= TextureFlushes;
+@@ -353,6 +359,7 @@ private:
+             if (buffer_cache.HasUncommittedFlushes()) {
+                 buffer_cache.CommitAsyncFlushes();
+                 flushes.should_flush = true;
++                flushes.required |= BufferFlushes;
+                 flushes.committed |= BufferFlushes;
+             }
+         }
 diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
 index 82e27cafec..0eb88d633b 100644
 --- a/src/video_core/gpu.cpp
@@ -6862,6 +6920,44 @@ index 58a41e4403..5e2114e041 100644
      LOG_INFO(HW_GPU,
               "ReadbackDependency core={} addr={:#x} size={} fence={} sequence={} split={} "
               "requested_generation={} backend_generation={} checked_generation={} "
+diff --git a/src/video_core/readback_diagnostics.h b/src/video_core/readback_diagnostics.h
+index 8a9c486f25..9e0ef9a5d7 100644
+--- a/src/video_core/readback_diagnostics.h
++++ b/src/video_core/readback_diagnostics.h
+@@ -48,6 +48,9 @@ struct Measurement {
+ 
+ struct ThreadData {
+     std::array<Measurement, static_cast<size_t>(Event::Count)> events{};
++    // Actual submission requirements: bit 0 texture, bit 1 buffer, bit 2 query.
++    std::array<u64, 8> fence_masks{};
++    u64 skipped_empty_fences{};
+     std::chrono::steady_clock::time_point begin{};
+     size_t depth{};
+     bool report_due{};
+@@ -55,6 +58,12 @@ struct ThreadData {
+ 
+ inline thread_local ThreadData data;
+ 
++inline void CountFence(u8 required, bool skipped = false) {
++    if (!Enabled()) return;
++    if (skipped) ++data.skipped_empty_fences;
++    else ++data.fence_masks[required & 7];
++}
++
+ class Scope {
+ public:
+     explicit Scope(Event event_, u64 bytes = 0) : event{event_}, enabled{Enabled()} {
+@@ -97,6 +106,10 @@ public:
+                                        value.calls, value.bytes, value.samples, value.sampled_ns);
+             }
+         }
++        for (size_t mask = 0; mask < data.fence_masks.size(); ++mask) {
++            if (data.fence_masks[mask]) summary += fmt::format(" | fence_mask={} count={}", mask, data.fence_masks[mask]);
++        }
++        summary += fmt::format(" | skipped_empty_fences={}", data.skipped_empty_fences);
+         LOG_INFO(HW_GPU, "ReadbackDiag window_ns={}{}",
+                  std::chrono::duration_cast<std::chrono::nanoseconds>(now - data.begin).count(),
+                  summary);
 diff --git a/src/video_core/readback_range_tracker.h b/src/video_core/readback_range_tracker.h
 new file mode 100644
 index 0000000000..1d837bb9ed

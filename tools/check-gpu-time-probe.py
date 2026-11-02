@@ -16,7 +16,6 @@ code=r'''
 using u32=unsigned;using u64=uint64_t;
 constexpr unsigned VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO=1,VK_QUERY_TYPE_TIMESTAMP=2,
  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT=3,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT=4,VK_QUERY_RESULT_64_BIT=1,VK_SUCCESS=0;
-namespace Eden::DevVulkan { inline bool gpu_time=true; }
 struct State { unsigned creates{},destroys{},waits{},resets{},writes{};bool ready=true,alive=true;unsigned bits=8;double period=2; } state;
 struct QueryInfo {unsigned sType;void* pNext;unsigned flags,queryType,queryCount,pipelineStatistics;};
 using PFN_vkCmdWriteTimestamp=void(*)(unsigned,unsigned,unsigned,unsigned);
@@ -57,12 +56,14 @@ struct Device {
  const Physical& GetPhysical()const{return physical;}
  unsigned GetGraphicsFamily()const{return 0;}
 };
-'''+(root/'headless/gpu_time_probe.inc').read_text()+r'''
+'''+f'\n#include "{root}/headless/submission_origin.h"\n'+(root/'headless/gpu_time_probe.inc').read_text()+r'''
 int main(){Device d;vk::CommandBuffer cmd;
+ Eden::DevVulkan::gpu_time=true;
  auto caller=reinterpret_cast<const void*>(uintptr_t(0x1234));
  {GpuSubmitOriginScope one{caller,false};assert(gpu_submit_origin.caller==caller&&!gpu_submit_origin.finish);
   {GpuSubmitOriginScope two{nullptr,true};assert(!gpu_submit_origin.caller&&gpu_submit_origin.finish);}
   assert(gpu_submit_origin.caller==caller&&!gpu_submit_origin.finish);
+  {GpuSubmitOriginScope inner{nullptr,true,true};assert(gpu_submit_origin.caller==caller&&!gpu_submit_origin.finish);}
   std::thread other{[]{assert(!gpu_submit_origin.caller&&!gpu_submit_origin.finish);}};other.join();
  }
  assert(!gpu_submit_origin.caller);

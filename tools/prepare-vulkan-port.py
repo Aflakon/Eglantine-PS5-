@@ -781,16 +781,16 @@ adapt('src/video_core/renderer_vulkan/vk_scheduler.cpp', 'vulkan_scheduler.cpp',
     ('        work_queue.pop();\n        event_cv.notify_all();',
      '        work_queue.pop();\n        if (!eden_vulkan_handoff_enabled() || (work_queue.empty() && drain_waiters)) drain_cv.notify_all();'),
 
-    ('#include <memory>', '#include <memory>\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include "dev_vulkan.h"\nextern "C" bool eden_vulkan_handoff_enabled();'),
+    ('#include <memory>', '#include <memory>\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include "dev_vulkan.h"\n#include "submission_origin.h"\nextern "C" bool eden_vulkan_handoff_enabled();'),
     ('namespace Vulkan {\n', 'namespace Vulkan {\n' + GPU_TIME_HELPERS),
     ('        .pInheritanceInfo = nullptr,\n    });\n}\n\nu64 Scheduler::SubmitExecution(',
      '        .pInheritanceInfo = nullptr,\n    });\n    GpuTimeBegin(device, current_upload_cmdbuf);\n}\n\nu64 Scheduler::SubmitExecution('),
     ('u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {',
      'u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {\n'
-     '    GpuSubmitOriginScope origin{__builtin_return_address(0), false};'),
+     '    GpuSubmitOriginScope origin{__builtin_return_address(0), false, true};'),
     ('void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {',
      'void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {\n'
-     '    GpuSubmitOriginScope origin{__builtin_return_address(0), true};'),
+     '    GpuSubmitOriginScope origin{__builtin_return_address(0), true, true};'),
     ('    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,',
      '    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,\n'
      '                            submit_origin = gpu_submit_origin,'),
@@ -1277,7 +1277,10 @@ probes = {
          '    entries.emplace(key, std::move(entry));'),
     ],
     'vk_buffer_cache': [
-        ('#include <algorithm>', '#include <algorithm>\n#include "dev_vulkan.h"'),
+        ('#include <algorithm>', '#include <algorithm>\n#include "dev_vulkan.h"\n#include "submission_origin.h"'),
+        ('void BufferCacheRuntime::Finish() {',
+         'void BufferCacheRuntime::Finish() {\n'
+         '    ::Eden::VulkanProbe::GpuSubmitOriginScope origin{__builtin_return_address(0), true};'),
         ('bool BufferCacheRuntime::BindMultiRangeStorageBuffer(u64 key, bool is_written) {\n',
          'bool BufferCacheRuntime::BindMultiRangeStorageBuffer(u64 key, bool is_written) {\n'
          '    if (::Eden::DevVulkan::disable_multi_range) {\n        return false;\n    }\n'),
@@ -1285,6 +1288,9 @@ probes = {
     # With custom border colours off (the console default), report which clamp-to-border
     # samplers ask for a colour the three standard ones cannot give exactly.
     'vk_texture_cache': [
+        ('void TextureCacheRuntime::Finish() {',
+         'void TextureCacheRuntime::Finish() {\n'
+         '    ::Eden::VulkanProbe::GpuSubmitOriginScope origin{__builtin_return_address(0), true};'),
         ('void TextureCacheRuntime::TranscodeAstcToBcn(\n'
          '    Image& image, const StagingBufferRef& map,\n'
          '    std::span<const VideoCommon::SwizzleParameters> swizzles) {\n',
@@ -1308,7 +1314,7 @@ probes = {
          '        }\n'
          '        staging_buffer_pool.ReleaseCompleted();\n'
          '    }\n'),
-        ('#include <algorithm>', '#include <algorithm>\n#include <cstdio>\n#include "dev_vulkan.h"\n#include "diagnostics.h"'),
+        ('#include <algorithm>', '#include <algorithm>\n#include <cstdio>\n#include "dev_vulkan.h"\n#include "diagnostics.h"\n#include "submission_origin.h"'),
         ('    has_custom_border_colors = samples_border && device.IsCustomBorderColorUsable();',
          '    if (::Eden::DevVulkan::trace_pipelines && samples_border) {\n'
          '        static std::vector<std::array<float, 4>> reported;\n'
