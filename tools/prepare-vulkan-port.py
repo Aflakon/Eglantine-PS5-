@@ -761,82 +761,7 @@ adapt('src/video_core/vulkan_common/vulkan_device.cpp', 'vulkan_device.cpp', [
 ])
 # Development GPU fault probe (dev_vulkan.h, submit_sync=on): wait for every
 # submission, so the CPU never records against work the GPU has not finished.
-GPU_TIME_HELPERS = r'''
-namespace {
-// Development GPU execution time (dev_vulkan.h gpu_time): timestamps at the start and end
-// of every scheduler command buffer, summed once the GPU has run them and printed every
-// 5 s as EDEN_GPU_TIME. Worker thread only.
-struct GpuTimeProbe {
-    static constexpr u32 SLOTS = 512;
-    vk::QueryPool pool;
-    PFN_vkCmdWriteTimestamp write{};
-    double period_ns{};
-    u64 next{}, first_pending{};
-    u32 current{};
-    u64 busy_ns{}, max_ns{}, submissions{};
-    std::chrono::steady_clock::time_point report{};
-    bool failed{};
-} gpu_time;
-
-void GpuTimeBegin(const Device& device, vk::CommandBuffer cmdbuf) {
-    if (!::Eden::DevVulkan::gpu_time || gpu_time.failed) return;
-    if (!gpu_time.write) {
-        const auto& dld = device.GetDispatchLoader();
-        gpu_time.write = reinterpret_cast<PFN_vkCmdWriteTimestamp>(
-            dld.vkGetDeviceProcAddr(*device.GetLogical(), "vkCmdWriteTimestamp"));
-        gpu_time.period_ns = device.GetPhysical().GetProperties().limits.timestampPeriod;
-        if (!gpu_time.write || gpu_time.period_ns <= 0) { gpu_time.failed = true; return; }
-        gpu_time.pool = device.GetLogical().CreateQueryPool({
-            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .queryType = VK_QUERY_TYPE_TIMESTAMP,
-            .queryCount = GpuTimeProbe::SLOTS * 2,
-            .pipelineStatistics = 0,
-        });
-        gpu_time.report = std::chrono::steady_clock::now();
-    }
-    if (gpu_time.next - gpu_time.first_pending >= GpuTimeProbe::SLOTS) {
-        gpu_time.failed = true; // results stopped arriving; never overwrite a pending slot
-        std::printf("EDEN_GPU_TIME failed=ring\n");
-        return;
-    }
-    gpu_time.current = static_cast<u32>(gpu_time.next++ % GpuTimeProbe::SLOTS);
-    cmdbuf.ResetQueryPool(*gpu_time.pool, gpu_time.current * 2, 2);
-    gpu_time.write(*cmdbuf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *gpu_time.pool, gpu_time.current * 2);
-}
-
-void GpuTimeEnd(vk::CommandBuffer cmdbuf) {
-    if (!::Eden::DevVulkan::gpu_time || gpu_time.failed || !gpu_time.write) return;
-    gpu_time.write(*cmdbuf, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *gpu_time.pool, gpu_time.current * 2 + 1);
-}
-
-void GpuTimeCollect(const Device& device) {
-    if (!::Eden::DevVulkan::gpu_time || gpu_time.failed || !gpu_time.write) return;
-    while (gpu_time.first_pending + 1 < gpu_time.next) {
-        const u32 slot = static_cast<u32>(gpu_time.first_pending % GpuTimeProbe::SLOTS);
-        std::array<u64, 2> stamps{};
-        if (device.GetLogical().GetQueryResults(*gpu_time.pool, slot * 2, 2, sizeof(stamps), stamps.data(),
-                                               sizeof(u64), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) break;
-        const u64 ns = stamps[1] > stamps[0]
-                           ? static_cast<u64>(double(stamps[1] - stamps[0]) * gpu_time.period_ns) : 0;
-        gpu_time.busy_ns += ns;
-        gpu_time.max_ns = (std::max)(gpu_time.max_ns, ns);
-        ++gpu_time.submissions;
-        ++gpu_time.first_pending;
-    }
-    const auto now = std::chrono::steady_clock::now();
-    const auto wall = std::chrono::duration_cast<std::chrono::nanoseconds>(now - gpu_time.report).count();
-    if (wall >= 5'000'000'000) {
-        std::printf("EDEN_GPU_TIME wall_ms=%.1f busy_ms=%.1f submissions=%llu max_ms=%.2f\n", wall / 1e6,
-                    gpu_time.busy_ns / 1e6, static_cast<unsigned long long>(gpu_time.submissions),
-                    gpu_time.max_ns / 1e6);
-        gpu_time.busy_ns = gpu_time.max_ns = gpu_time.submissions = 0;
-        gpu_time.report = now;
-    }
-}
-} // namespace
-'''
+GPU_TIME_HELPERS = (port / 'gpu_time_probe.inc').read_text()
 # Keep command availability separate from queue-drain completion. Only the worker
 # waits on event_cv; WaitWorker waits on drain_cv under the same queue mutex.
 adapt('src/video_core/renderer_vulkan/vk_scheduler.h',
@@ -845,6 +770,11 @@ adapt('src/video_core/renderer_vulkan/vk_scheduler.h',
      '    std::condition_variable_any event_cv;\n    std::condition_variable drain_cv;\n    unsigned drain_waiters{};'),
 ])
 adapt('src/video_core/renderer_vulkan/vk_scheduler.cpp', 'vulkan_scheduler.cpp', [
+    ('Scheduler::~Scheduler() = default;',
+     'Scheduler::~Scheduler() {\n'
+     '    worker_thread.request_stop();\n'
+     '    if (worker_thread.joinable()) worker_thread.join();\n'
+     '    GpuTimeReset(device);\n}'),
     ('        event_cv.wait(ql, [this] { return work_queue.empty(); });',
      '        ++drain_waiters;\n        drain_cv.wait(ql, [this] { return work_queue.empty(); });\n        --drain_waiters;'),
     ('            event_cv.notify_all();', '            if (eden_vulkan_handoff_enabled()) event_cv.notify_one();\n            else event_cv.notify_all();'),
