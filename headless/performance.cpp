@@ -453,6 +453,26 @@ std::size_t TrimHeap(const char* why) {
     return returned;
 }
 
+void ReportMemoryPressure(unsigned seconds) {
+    std::size_t tables = 0, table_span = 0, guest = 0, guest_span = 0;
+    ::Common::SparseUsage(&table_span, &tables);
+    ::Common::GuestMemoryUsage(&guest_span, &guest);
+    unsigned blocks = 0;
+    const auto large = eden_heap_large_held ? eden_heap_large_held(&blocks) : 0;
+    std::printf("MKW_MEMORY seconds=%u tables=%zu table_span=%zu guest=%zu guest_span=%zu heap=%zu large=%zu large_blocks=%u",
+        seconds, tables, table_span, guest, guest_span,
+        eden_heap_committed ? eden_heap_committed() : std::size_t{0}, large, blocks);
+#ifdef PS5_NATIVE
+    const auto total = sceKernelGetDirectMemorySize();
+    std::int64_t start = 0;
+    std::size_t largest = 0;
+    const auto status = total > 0 ? sceKernelAvailableDirectMemorySize(0, total, 0x4000, &start, &largest) : -1;
+    std::printf(" direct_total=%lld largest_free=%zu query_status=%d", static_cast<long long>(total), largest, int(status));
+#endif
+    std::printf("\n");
+    std::fflush(stdout);
+}
+
 void ReportGpuThread(unsigned frame) {
     static unsigned heap_reports = 0;
     if (++heap_reports % 6 == 1) ReportHeap("report");

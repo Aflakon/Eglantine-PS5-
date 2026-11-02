@@ -10864,7 +10864,7 @@ index 89aff1cd0e..3a23139f19 100644
      bool IsKhrImageFormatListSupported() const {
          return extensions.image_format_list || instance_version >= VK_API_VERSION_1_2;
 diff --git a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
-index 79328cbc69..eb87db6c9e 100644
+index 79328cbc69..05ad0e0e91 100644
 --- a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
 +++ b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
 @@ -5,6 +5,9 @@
@@ -10896,7 +10896,7 @@ index 79328cbc69..eb87db6c9e 100644
 +        static std::mutex probe_mutex;
 +        static unsigned probe_rows{};
 +        std::lock_guard probe_lock{probe_mutex};
-+        if (result != VK_SUCCESS || probe_rows < 160) {
++        if (result != VK_SUCCESS || probe_rows < 8192) {
 +            ++probe_rows;
 +            VkMemoryRequirements requirements{};
 +            if (result == VK_SUCCESS) {

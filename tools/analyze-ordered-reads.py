@@ -29,7 +29,7 @@ def write_csv(path, rows):
             writer.writerows(rows)
 
 
-def analyze(prefix):
+def analyze(prefix, allow_incomplete_copy_sources=False):
     meta = dict(line.split('=', 1) for line in Path(str(prefix) + '-meta.txt').read_text().splitlines() if '=' in line)
     if meta.get('complete') != '1' or int(meta.get('dropped', '-1')) or int(meta.get('inflight', '-1')):
         raise ValueError('Incomplete capture: do not interpret dropped or unfinished reads as fewer waits')
@@ -170,9 +170,15 @@ def analyze(prefix):
     result['mapped_metrics_available'] = 'mapped_direct_bytes' in bounds[0]
     for field in ('mapped_direct_bytes','mapped_checked_bytes','mapped_failures'):
         result[field] = sum(frame[field] for frame in frames)
-    if meta.get('copy_sources') == '1':
-        if meta.get('copy_complete') != '1' or int(meta.get('copy_dropped','-1')):
-            raise ValueError('Incomplete buffer-copy source capture')
+    copy_sources_complete = meta.get('copy_complete') == '1' and int(meta.get('copy_dropped', '-1')) == 0
+    result['copy_sources_complete'] = copy_sources_complete if meta.get('copy_sources') == '1' else None
+    result['copy_source_records_dropped'] = int(meta.get('copy_dropped', '0'))
+    if meta.get('copy_sources') == '1' and not copy_sources_complete and not allow_incomplete_copy_sources:
+        raise ValueError('Incomplete buffer-copy source capture')
+    # A separate bounded source stream may overflow while every ordered read and
+    # frame-boundary aggregate is complete. Explicit opt-in omits source attribution;
+    # it never counts missing source records as zero copies or fewer waits.
+    if meta.get('copy_sources') == '1' and copy_sources_complete:
         with Path(str(prefix)+'-copies.csv').open() as f:
             copies = [{k:int(v) for k,v in row.items()} for row in csv.DictReader(f)]
         assert len(copies) == int(meta['copy_count']) == int(meta['copy_attempted'])
@@ -254,7 +260,9 @@ def analyze(prefix):
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('prefix',type=Path,help='Path before -reads.csv/-frames.csv/-meta.txt')
-    args=ap.parse_args();r=analyze(args.prefix)
+    ap.add_argument('--allow-incomplete-copy-sources', action='store_true',
+                    help='Keep complete ordered-read metrics but omit incomplete per-source attribution')
+    args=ap.parse_args();r=analyze(args.prefix, args.allow_incomplete_copy_sources)
     print(json.dumps({k:r[k] for k in ('frames','records','dropped','seconds','fps','waits_per_frame','total_call_cpu_ms','total_parked_cpu_ms','clean_at_service')},indent=2))
     print('Wrote per-frame summary, caller types, hot ranges and analysis alongside the raw files.')
 

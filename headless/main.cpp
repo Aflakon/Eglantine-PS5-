@@ -1590,11 +1590,16 @@ int main(int argc, char** argv) {
 #endif
 #ifdef EDEN_MKW_DIAGNOSTICS
                     unsigned diagnostic_sample{};
+                    unsigned memory_sample{};
 #endif
                     while (!stop.stop_requested()) {
 #ifdef EDEN_MKW_DIAGNOSTICS
                         const auto diagnostic_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                             std::chrono::steady_clock::now() - session_start).count();
+                        if (diagnostic_elapsed >= memory_sample * 5) {
+                            Eden::Performance::ReportMemoryPressure(static_cast<unsigned>(diagnostic_elapsed));
+                            memory_sample = static_cast<unsigned>(diagnostic_elapsed) / 5 + 1;
+                        }
                         if (diagnostic_sample < 8 && diagnostic_elapsed >= 20 + diagnostic_sample * 15) {
                             ++diagnostic_sample;
                             if (diagnostic_sample == 8) {

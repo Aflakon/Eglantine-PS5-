@@ -472,6 +472,7 @@ inline void CountJit(std::atomic<unsigned long long>& counter) {
 // GPU thread only (Vulkan frame report): cumulative GPU-thread idle/dispatch/wait
 // totals with the owner's CPU clock, then a guest-core CPU snapshot.
 void ReportGpuThread(unsigned frame);
+void ReportMemoryPressure(unsigned seconds);
 // The heap's line in stderr.log: what it holds of the pool, what of that its blocks use, what it has given back.
 void ReportHeap(const char* why);
 // Gives the heap's empty spaces back to the pool; the bytes returned.
