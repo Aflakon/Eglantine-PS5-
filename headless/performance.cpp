@@ -453,7 +453,10 @@ std::size_t TrimHeap(const char* why) {
     return returned;
 }
 
+extern "C" void eden_vma_probe(unsigned) __attribute__((weak));
 void ReportMemoryPressure(unsigned seconds) {
+    if (seconds >= 90 && seconds <= 270 && seconds % 60 == 30 && eden_vma_probe)
+        eden_vma_probe(seconds);
     std::size_t tables = 0, table_span = 0, guest = 0, guest_span = 0;
     ::Common::SparseUsage(&table_span, &tables);
     ::Common::GuestMemoryUsage(&guest_span, &guest);

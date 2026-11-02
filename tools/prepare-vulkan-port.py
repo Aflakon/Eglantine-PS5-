@@ -476,8 +476,46 @@ def refused(call, detail, values):
 IMAGE_VALUES = 'ci.extent.width, ci.extent.height, ci.extent.depth, ci.arrayLayers, ci.mipLevels, unsigned(ci.samples), int(ci.format)'
 BUFFER_VALUES = 'static_cast<unsigned long long>(ci.size), unsigned(ci.usage)'
 adapt('src/video_core/vulkan_common/vulkan_memory_allocator.cpp', 'vulkan_memory_allocator.cpp', [
+    ('            vmaCalculateStatistics(allocator, &statistics);',
+     '            vmaCalculateStatistics(allocator, &statistics);\n'
+     '            if (probe_rows == 160 || probe_rows == 256 || probe_rows == 512 || result != VK_SUCCESS)\n'
+     '                EdenVmaSnapshot(allocator, probe_rows);'),
+    ('MemoryAllocator::MemoryAllocator(const Device &device_)',
+     r'''namespace {
+std::mutex vma_probe_mutex;
+VmaAllocator vma_probe_allocator{};
+void EdenVmaSnapshot(VmaAllocator allocator, unsigned tag) {
+    char* json = nullptr;
+    vmaBuildStatsString(allocator, &json, VK_TRUE);
+    if (!json) return;
+    char path[192];
+    std::snprintf(path, sizeof(path), "/data/eglantineps5/logs/mkw-vma-%d-%u.json", getpid(), tag);
+    const auto bytes = std::strlen(json);
+    bool written = false;
+    if (bytes <= (8U << 20)) {
+        if (FILE* file = std::fopen(path, "w")) {
+            written = std::fwrite(json, 1, bytes, file) == bytes;
+            std::fclose(file);
+        }
+    }
+    std::fprintf(stderr, "MKW_VMA_MAP tag=%u bytes=%zu written=%u\n", tag, bytes, unsigned(written));
+    vmaFreeStatsString(allocator, json);
+}
+}
+extern "C" void eden_vma_probe(unsigned seconds) {
+    std::lock_guard lock{vma_probe_mutex};
+    if (vma_probe_allocator) EdenVmaSnapshot(vma_probe_allocator, 100000 + seconds);
+}
+MemoryAllocator::MemoryAllocator(const Device &device_)'''),
+    ('    // Preserve the previous "RenderDoc small heap"',
+     '    { std::lock_guard lock{vma_probe_mutex}; vma_probe_allocator = allocator; }\n'
+     '    // Preserve the previous "RenderDoc small heap"'),
+    ('MemoryAllocator::~MemoryAllocator() = default;',
+     'MemoryAllocator::~MemoryAllocator() {\n'
+     '    std::lock_guard lock{vma_probe_mutex};\n'
+     '    if (vma_probe_allocator == allocator) vma_probe_allocator = nullptr;\n}'),
     ('#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n',
-     '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
+     '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
     # What an image was that the allocator could not make at all, for stderr.log.
     ('    if (result != VK_SUCCESS) {\n        LOG_CRITICAL(Render_Vulkan, "Image {}x{}x{} ({} levels, {} layers, format {}) failed: {}",',
      """    if (result != VK_SUCCESS) {
