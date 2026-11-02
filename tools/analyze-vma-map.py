@@ -12,7 +12,10 @@ from pathlib import Path
 def analyze(data):
     pools = []
     def visit(value, path):
-        if isinstance(value, dict):
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, path + '/' + str(index))
+        elif isinstance(value, dict):
             if 'Blocks' in value:
                 pools.append((path, value))
             else:

@@ -13,6 +13,9 @@ jobs=${EDEN_BUILD_JOBS:-$(nproc)}
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 command -v ninja >/dev/null
 cache=$(command -v ccache)
+# New generated headers can shadow an upstream include absent from an older
+# direct-mode manifest. Reprocess includes so cached objects retain one layout.
+export CCACHE_NODIRECT=1
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 bash tools/build-core-fixture.sh
@@ -73,6 +76,8 @@ python3 -B "$root/tools/check-sparse-header.py" "$scratch/native-local"
 python3 -B "$root/tools/check-multiplayer-headers.py" "$scratch/native-local"
 if [[ "${EDEN_PS5_VULKAN:-OFF}" == ON ]]; then
     python3 -B "$root/tools/check-vulkan-handoff.py"
+    python3 -B "$root/tools/check-transient-images.py"
+    python3 -B "$root/tools/check-native-allocator-header.py"
 fi
 # Source checks of the release configuration (development builds opt out: EDEN_SKIP_SOURCE_CHECKS=1).
 [[ ${EDEN_SKIP_SOURCE_CHECKS:-0} == 1 ]] && exit 0

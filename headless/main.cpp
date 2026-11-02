@@ -516,6 +516,7 @@ int main(int argc, char** argv) {
         const auto diagnostic_capture_dir = Eden::LogFile("mkw-gpfifo-" + std::to_string(getpid()));
         std::filesystem::create_directories(diagnostic_capture_dir);
         setenv("EDEN_NX2_GPFIFO_DUMP", diagnostic_capture_dir.c_str(), 1);
+        setenv("EDEN_PS5_TRANSIENT_POOLS", "1", 1);
         // Enable bounded readback probes for explicit diagnostic builds.
         setenv("EDEN_NX2_READBACK_DIAGNOSTICS", "1", 1);
         unsetenv("EDEN_NX2_PARTIAL_TEXTURE_READBACK");

@@ -475,11 +475,24 @@ def refused(call, detail, values):
             .replace('DETAIL', detail).replace('VALUES', values))
 IMAGE_VALUES = 'ci.extent.width, ci.extent.height, ci.extent.depth, ci.arrayLayers, ci.mipLevels, unsigned(ci.samples), int(ci.format)'
 BUFFER_VALUES = 'static_cast<unsigned long long>(ci.size), unsigned(ci.usage)'
+adapt('src/video_core/vulkan_common/vulkan_memory_allocator.h',
+      'include/video_core/vulkan_common/vulkan_memory_allocator.h', [
+    ('#pragma once', '#pragma once\n#include <array>\n#include <mutex>'),
+    ('        vk::Image CreateImage(const VkImageCreateInfo &ci, bool dedicated = false) const;',
+     '        vk::Image CreateImage(const VkImageCreateInfo &ci, bool dedicated = false) const;\n'
+     '        vk::Image CreateTemporaryImage(const VkImageCreateInfo &ci) const;'),
+    ('        u32 valid_memory_types{~0u};',
+     '        u32 valid_memory_types{~0u};\n'
+     '        mutable std::mutex temporary_pool_mutex;\n'
+     '        mutable std::array<VmaPool, VK_MAX_MEMORY_TYPES> temporary_pools{};'),
+])
 adapt('src/video_core/vulkan_common/vulkan_memory_allocator.cpp', 'vulkan_memory_allocator.cpp', [
     ('            vmaCalculateStatistics(allocator, &statistics);',
      '            vmaCalculateStatistics(allocator, &statistics);\n'
      '            if (probe_rows == 160 || probe_rows == 256 || probe_rows == 512 || result != VK_SUCCESS)\n'
      '                EdenVmaSnapshot(allocator, probe_rows);'),
+    ('vk::Image MemoryAllocator::CreateUnbackedImage(const VkImageCreateInfo &ci) const {',
+     (port / 'transient_images.inc').read_text() + '\nvk::Image MemoryAllocator::CreateUnbackedImage(const VkImageCreateInfo &ci) const {'),
     ('MemoryAllocator::MemoryAllocator(const Device &device_)',
      r'''namespace {
 std::mutex vma_probe_mutex;
@@ -513,9 +526,10 @@ MemoryAllocator::MemoryAllocator(const Device &device_)'''),
     ('MemoryAllocator::~MemoryAllocator() = default;',
      'MemoryAllocator::~MemoryAllocator() {\n'
      '    std::lock_guard lock{vma_probe_mutex};\n'
-     '    if (vma_probe_allocator == allocator) vma_probe_allocator = nullptr;\n}'),
+     '    if (vma_probe_allocator == allocator) vma_probe_allocator = nullptr;\n'
+     '    for (auto pool : temporary_pools) if (pool) vmaDestroyPool(allocator, pool);\n}'),
     ('#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n',
-     '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
+     '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include <cstdlib>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
     # What an image was that the allocator could not make at all, for stderr.log.
     ('    if (result != VK_SUCCESS) {\n        LOG_CRITICAL(Render_Vulkan, "Image {}x{}x{} ({} levels, {} layers, format {}) failed: {}",',
      """    if (result != VK_SUCCESS) {
@@ -1342,6 +1356,8 @@ probes = {
         # Decode images can otherwise survive a long loading burst until TickFrame. At this
         # boundary every use of the input and output staging buffers has been recorded, so a
         # wait is safe (unlike a wait inside an arbitrary staging-buffer allocation).
+        ('        .image = memory_allocator.CreateImage(VkImageCreateInfo{\n            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,',
+         '        .image = memory_allocator.CreateTemporaryImage(VkImageCreateInfo{\n            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,'),
         ('    pending_transcodes.push_back(std::move(pending));\n',
          '    pending_transcodes.push_back(std::move(pending));\n'
          '    const auto memory_short = ::Eden::Performance::graphics_memory_probe.load(std::memory_order_relaxed);\n'
