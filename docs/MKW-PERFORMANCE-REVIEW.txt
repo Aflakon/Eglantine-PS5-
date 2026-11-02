@@ -89,11 +89,13 @@ one-shot Mario Kart launch controls and intrusive snapshots/environment
 probes. Some bounded core and CPU instrumentation remains compiled/enabled;
 this is a broad research draft, not a claim of zero production overhead.
 Published-semaphore and partial-readback experiments need further review.
-The final merge onto current main and diagnostic gating have not been
-console-tested; earlier experiment binaries are the runtime evidence.
+Later diagnostic builds on the current-main base were exercised on console;
+the latest timestamp build reached the title/menu, then exhausted memory
+before Free Roam. The complete accumulated normal configuration has not been
+console-tested. Earlier experiment binaries remain the readback evidence.
 
 Host validation
-Patch reproduction: four patches, 127 touched files, matching the working
+Patch reproduction: four patches, 128 touched files, matching the working
 core. ASan/UBSan checks passed for mapped allocation policy, range tracker
 (240,000 oracle queries), writer tracker (10,000 allocation lifetimes), and
 native directory metadata including symlinks, malformed records and NFS.
@@ -131,3 +133,94 @@ command. Next runtime evidence should correlate preceding-command execution
 with each long read, including forced fence drains and command handoffs.
 No frame-rate gain is claimed from this analyzer change. Read-only console
 status was idle during this follow-up; no deployment or restart was performed.
+
+Follow-up: memory accounting and allocation lifetime
+Five-second diagnostic reports distinguish committed guest pages, sparse
+tables, heap arenas, large allocations and the largest free physical block.
+In run 1793655818645405571, sparse tables remained around 228-230 MiB while
+guest backing grew from 3977 to 4473 MiB and heap arenas from 1472 to 1632 MiB
+(plus 396 MiB of large allocations). Tables were not the dominant growth.
+This does not justify reclaiming live sparse slots without lifetime proof.
+
+Bounded VMA detailed maps and tools/analyze-vma-map.py separate dedicated
+allocations, wholly empty blocks and unused space within live blocks. In run
+1793656450297553771 at 150 s, pooled backing was 2056 MiB plus 1722.91 MiB
+dedicated, with no wholly empty pooled blocks and 573.47 MiB unused inside
+live blocks. Tiny allocations pinned many 64 MiB blocks. The run exhausted
+device memory at 224 s; clearing only empty blocks cannot solve this case.
+
+An opt-in ASTC temporary-image allocator uses 16 MiB custom-pool blocks,
+bounded to 32 blocks per memory type, with ordinary allocation fallback.
+It preserves existing GPU completion/lifetime rules and does not relocate
+live images. EDEN_PS5_TRANSIENT_POOLS enables it; diagnostic builds enable
+it explicitly. Allocation/binding failures clean partial resources.
+Run 1793657655811844512 reached viewed Free Roam and completed its bounded
+observation. At 90 s its pooled backing was 1816 MiB versus 2064 MiB in the
+earlier run, but scenes differed: this is not a controlled 248 MiB saving.
+Later unused space inside live default-pool blocks returned to 839.95 MiB.
+The final approximately 30 seconds averaged 15.453 FPS. Ten complete traced
+frames had 225 ordered reads/frame and 319.411 ms summed frontend queue delay
+across threads. No matched FPS gain or sustained stability is established.
+
+Adding allocator fields exposed a build-cache hazard: direct-mode ccache
+could reuse consumers compiled with the original header while other objects
+used the generated override. Native builds now disable direct-mode lookup,
+declare explicit generated-header dependencies, and verify factory, renderer,
+allocator and texture-cache object dependencies before packaging.
+
+Follow-up: worker notification A/B and semaphore clock
+The scheduler now has distinct work and drain condition variables. Selective
+notification is experimental and defaults off. The alternative uses notify_one
+for work and avoids unnecessary drain broadcasts; completion order is retained.
+Both comparison modes use the split condition variables, so the baseline is
+not the original upstream shared-CV implementation.
+
+Run 1793658554054919162 used the same process, stationary forest kart/camera,
+and acknowledged mode sequence 0,1,0,1. All four 10-frame streams were complete.
+Pooled baseline/selective results (20 frames each):
+  FPS:                         12.3113 / 12.0735
+  Ordered reads/frame:        213.7 / 207.85
+  Read-call CPU ms/frame:      52.5568 / 51.8739
+  Frontend queue ms/frame:     48.4376 / 47.8636
+  Backend queue ms/frame:       0.38163 / 0.37118
+  GPU wait API ms/frame:        0.32541 / 0.31606
+  GPU and CPU copy B/frame:    999140 / 973491.2
+CPU durations overlap across threads. Animated scene traffic and short windows
+can account for count/copy variation. No meaningful wait/FPS benefit was shown;
+selective notification stays disabled. Profiles confirm the notification policy
+changed, so the negative result is retained rather than presented as a gain.
+
+Satisfied Ampere semaphore acquires now avoid reading the diagnostic clock;
+unsatisfied acquires still initialize their warning timer. Comparisons,
+draining, waiter registration, fence release and the second read are unchanged.
+The real-branch ASan/UBSan fixture covers satisfied, blocked, released, latched,
+unmapped and invalid operations. No isolated console FPS benefit is claimed.
+
+Follow-up: bounded GPU timestamps
+Diagnostic builds enable a 512-slot timestamp probe with valid-bit wrap handling,
+nonblocking collection, cumulative counters and device-lifetime cleanup after
+the scheduler worker joins. Disabled builds add no device-idle wait. Fixtures
+cover readiness, wrap, ring exhaustion, invalid capabilities and relaunch.
+
+Latest native diagnostic build/package passed. Eboot SHA256:
+aeedd6b5c254b8555f7043ea6aa3d6d3b1d9d4a2684c23ed3261e8fd632580f6
+Run 1793659386298621062 reached viewed title/menu with working query results.
+Seven late windows totalled 35.059 s, 50,770 submissions and 4.0811 s of
+graphics timestamp spans (1448 submissions/s). The preceding upload command
+buffer, gaps and other GPU work are outside these brackets. These numbers
+are not whole-device utilization or proof that the entire game is CPU-bound;
+timestamp instrumentation itself adds overhead. Free Roam was not reached.
+At 234 s the Vulkan worker failed with VK_ERROR_OUT_OF_DEVICE_MEMORY and a
+largest free physical block of zero. Memory exhaustion remains unresolved.
+
+The diagnostic source fixtures and allocator-header checks passed; the full
+release hot-path rule still fails on retained experimental timers. Detailed
+copy-source overflow is now explicitly reported: strict analysis rejects it;
+an optional mode retains complete ordered-read/frame aggregates but omits
+incomplete source attribution. Missing copy events are never counted as zero.
+Original executable, package metadata, settings and input controls were restored
+and verified after these runs. Raw console/game captures remain excluded.
+
+Next measurements should cover upload plus graphics work and classify actual
+submission initiators alongside each frame's waits. Allocation fragmentation
+and sustained Free Roam stability remain open before any 40 FPS claim.
