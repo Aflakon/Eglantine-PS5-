@@ -5746,6 +5746,29 @@ index 706200492d..17d0491d98 100644
          struct ConstantBuffer {
              u32 size;
              u32 address_high;
+diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
+index dd468c8b57..2bcc6c18bc 100644
+--- a/src/video_core/engines/puller.cpp
++++ b/src/video_core/engines/puller.cpp
+@@ -236,7 +236,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+             .address = regs.semaphore_address.SemaphoreAddress(),
+             .value = regs.semaphore_sequence,
+             .operation = static_cast<u32>(op),
+-            .since = std::chrono::steady_clock::now(),
++            .since = {},
+             .reported = false,
+         };
+         if (op != GpuSemaphoreOperation::AcquireEqual && op != GpuSemaphoreOperation::AcquireGequal &&
+@@ -249,6 +249,9 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+             return;
+         }
++        // The clock is only for the delayed-wait warning. Already-satisfied
++        // acquires must not pay for a host clock query on every GPU command.
++        acquire.since = std::chrono::steady_clock::now();
+         // Registered before the fences run, so a release among them that meets the value counts
+         // even if a later one overwrites it.
+         auto& waiters = Nx2SemaphoreWaiters::Get();
 diff --git a/src/video_core/engines/sw_blitter/blitter.cpp b/src/video_core/engines/sw_blitter/blitter.cpp
 index 8bcc2f7a76..be1107e1bb 100644
 --- a/src/video_core/engines/sw_blitter/blitter.cpp
