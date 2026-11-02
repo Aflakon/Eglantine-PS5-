@@ -484,6 +484,9 @@ int main(int argc, char** argv) {
         }
 #endif
         std::string selected_game;
+#if defined(EDEN_DEV_ROM_ID) && !defined(EDEN_DEV_PROFILE)
+        bool compatibility_probe = false;
+#endif
         Eden::Crash::SetSession("launcher", false);
 #ifdef PS5_NATIVE
         // A Vulkan session at 120 Hz handed the output back at 60 Hz as it closed; the launcher
@@ -516,6 +519,9 @@ int main(int argc, char** argv) {
         forwarded_session = false;
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)
         if (std::exchange(autoboot_pending, false)) {
+#if defined(EDEN_DEV_ROM_ID) && !defined(EDEN_DEV_PROFILE)
+        compatibility_probe = true;
+#endif
         // Match the title ID in the file name, else in the ROM's own metadata; the game files
         // folder first, then the pre-1.000.020 assets folder that still holds other test titles.
         const auto development_title = std::strtoull(development_id.c_str(), nullptr, 16);
@@ -540,6 +546,9 @@ int main(int argc, char** argv) {
         }
         }
         if (selected_game.empty()) {
+#if defined(EDEN_DEV_ROM_ID) && !defined(EDEN_DEV_PROFILE)
+            compatibility_probe = false;
+#endif
             Eden::BootTrace::Line("opening the launcher");
             selected_game = SelectEglantinePS5Game(rooms, launch_error);
         }
@@ -1693,8 +1702,12 @@ int main(int argc, char** argv) {
                             lock.lock();
                         }
 #elif defined(EDEN_DEV_ROM_ID)
-                        // Bounded compatibility probe (10 minutes; the runner usually closes
-                        // the title first); use the ordinary teardown path.
+                        // Library and forwarded launches are ordinary gameplay, even
+                        // in a build that also supports automatic compatibility probes.
+                        if (!compatibility_probe) {
+                            completion->wake.wait(lock, completed);
+                        } else {
+                        // Only automatic development-title probes stop after ten minutes.
                         constexpr unsigned observation_samples = 120;
                         for (unsigned sample = 0; sample < observation_samples; ++sample) {
                             if (completion->wake.wait_for(lock, std::chrono::seconds(5), completed)) break;
@@ -1712,6 +1725,7 @@ int main(int argc, char** argv) {
 #endif
                             window.CaptureNextFrame(system.GPU().Renderer(), [] {});
                             lock.lock();
+                        }
                         }
 #else
                         completion->wake.wait(lock, completed);
