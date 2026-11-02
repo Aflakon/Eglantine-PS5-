@@ -71,6 +71,9 @@ cmake --build "$scratch/native-local" --target eden-headless core -j "$jobs"
 # In every build: an object that saw Eden's own table header would write a table the rest keeps sparse.
 python3 -B "$root/tools/check-sparse-header.py" "$scratch/native-local"
 python3 -B "$root/tools/check-multiplayer-headers.py" "$scratch/native-local"
+if [[ "${EDEN_PS5_VULKAN:-OFF}" == ON ]]; then
+    python3 -B "$root/tools/check-vulkan-handoff.py"
+fi
 # Source checks of the release configuration (development builds opt out: EDEN_SKIP_SOURCE_CHECKS=1).
 [[ ${EDEN_SKIP_SOURCE_CHECKS:-0} == 1 ]] && exit 0
 python3 -B "$root/headless/check_audio_shutdown.py" "$scratch/native-local/headless/core.cpp" "$scratch/source/src/core/core.cpp"

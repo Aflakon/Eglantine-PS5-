@@ -43,6 +43,10 @@ foreach(name vk_fence_manager vk_buffer_cache vk_texture_cache vk_descriptor_buf
     list(APPEND video_sources "${PORT_BUILD_DIR}/${name}_cost.cpp")
 endforeach()
 
+# Scheduler is embedded in RendererVulkan. Existing depfiles may still name the
+# upstream header, so invalidate consumers when introducing its port override.
+set_property(SOURCE ${video_sources} TARGET_DIRECTORY video_core APPEND PROPERTY OBJECT_DEPENDS
+    "${PORT_BUILD_DIR}/include/video_core/renderer_vulkan/vk_scheduler.h")
 target_include_directories(video_core BEFORE PUBLIC "${PORT_BUILD_DIR}/include")
 target_include_directories(video_core BEFORE PUBLIC "${PORT_BUILD_DIR}/vulkan-cache")
 target_include_directories(video_core PRIVATE "${PORT_BUILD_DIR}" "${EDEN_PORT_DIR}")

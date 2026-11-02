@@ -785,7 +785,20 @@ void GpuTimeCollect(const Device& device) {
 }
 } // namespace
 '''
+# Keep command availability separate from queue-drain completion. Only the worker
+# waits on event_cv; WaitWorker waits on drain_cv under the same queue mutex.
+adapt('src/video_core/renderer_vulkan/vk_scheduler.h',
+      'include/video_core/renderer_vulkan/vk_scheduler.h', [
+    ('    std::condition_variable_any event_cv;',
+     '    std::condition_variable_any event_cv;\n    std::condition_variable drain_cv;\n    unsigned drain_waiters{};'),
+])
 adapt('src/video_core/renderer_vulkan/vk_scheduler.cpp', 'vulkan_scheduler.cpp', [
+    ('        event_cv.wait(ql, [this] { return work_queue.empty(); });',
+     '        ++drain_waiters;\n        drain_cv.wait(ql, [this] { return work_queue.empty(); });\n        --drain_waiters;'),
+    ('            event_cv.notify_all();', '            event_cv.notify_one();'),
+    ('        work_queue.pop();\n        event_cv.notify_all();',
+     '        work_queue.pop();\n        if (work_queue.empty() && drain_waiters) drain_cv.notify_all();'),
+
     ('#include <memory>', '#include <memory>\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include "dev_vulkan.h"'),
     ('namespace Vulkan {\n', 'namespace Vulkan {\n' + GPU_TIME_HELPERS),
     ('        .pInheritanceInfo = nullptr,\n    });\n    current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());',
