@@ -49,8 +49,69 @@ void SampleCpu(unsigned core, unsigned long long thread, unsigned long long pc, 
 struct alignas(64) Totals {
     std::atomic<unsigned long long> calls{}, nanoseconds{}, requested_bytes{};
 };
-inline std::array<Totals, 4> compilation;
-inline std::array<std::atomic<unsigned long long>, 4> evacuations{};
+inline std::array<Totals, 6> compilation;
+// Temporary MKW timing probes.
+inline Totals mkw_transcode, mkw_transcode_finish;
+inline std::array<Totals, 512> mkw_guest_run{}, mkw_main_wakers{};
+// Temporary bounded dependency and run-exit samples. Exit PCs are not statistical PC samples.
+inline std::array<std::array<Totals, 512>, 11> mkw_worker_wakers{};
+struct MkwRunExit {
+    std::atomic<unsigned long long> key{}, calls{}, ns{}, max_ns{};
+};
+inline std::array<MkwRunExit, 8192> mkw_run_exits{};
+inline std::atomic<unsigned long long> mkw_run_exit_overflow{};
+// Latest slow slice for each observed guest worker, sampled at most once per second.
+// Atomic sequence brackets protect the external reader from partially published records.
+inline std::array<std::array<std::atomic<unsigned long long>, 24>, 11> mkw_slow_runs{};
+template <typename Jit, typename Memory>
+inline void MkwSlowRun(unsigned long long tid, unsigned long long now,
+                       unsigned long long ns, unsigned halt, const Jit& jit, Memory& memory) {
+    if (tid < 181 || tid > 191 || ns < 2'000'000) return;
+    auto& row = mkw_slow_runs[tid - 181];
+    if (now - row[1].load(std::memory_order_relaxed) < 1'000'000'000) return;
+    row[0].fetch_add(1, std::memory_order_seq_cst);
+    row[1].store(now); row[2].store(ns); row[3].store(jit.GetPC());
+    row[4].store(jit.GetRegister(30)); row[5].store(jit.GetFpcr()); row[6].store(halt);
+    row[7].store(jit.GetRegister(0)); row[8].store(jit.GetRegister(1));
+    auto fp = jit.GetRegister(29);
+    row[9].store(fp);
+    for (unsigned i = 10; i < 24; ++i) {
+        unsigned long long ret = 0;
+        if (fp && (fp & 7) == 0 && memory.IsValidVirtualAddressRange(fp, 16)) {
+            ret = memory.Read64(fp + 8);
+            const auto next = memory.Read64(fp);
+            fp = next > fp && next - fp < 1024 * 1024 ? next : 0;
+        } else fp = 0;
+        row[i].store(ret);
+    }
+    row[0].fetch_add(1, std::memory_order_seq_cst);
+}
+
+inline void MkwRecordRunExit(unsigned long long tid, unsigned long long pc,
+                             unsigned long long ns) {
+    if (tid < 181 || tid > 191 || pc >= (1ULL << 48)) return;
+    const auto key = (tid << 48) | pc;
+    unsigned slot = static_cast<unsigned>((pc >> 2) ^ (pc >> 16) ^ tid) % mkw_run_exits.size();
+    for (unsigned probe = 0; probe < mkw_run_exits.size(); ++probe) {
+        auto& row = mkw_run_exits[slot];
+        auto held = row.key.load(std::memory_order_relaxed);
+        if (held == 0) {
+            row.key.compare_exchange_strong(held, key, std::memory_order_relaxed);
+            held = row.key.load(std::memory_order_relaxed);
+        }
+        if (held == key) {
+            row.calls.fetch_add(1, std::memory_order_relaxed);
+            row.ns.fetch_add(ns, std::memory_order_relaxed);
+            auto max = row.max_ns.load(std::memory_order_relaxed);
+            while (max < ns && !row.max_ns.compare_exchange_weak(max, ns, std::memory_order_relaxed)) {}
+            return;
+        }
+        slot = (slot + 1) % mkw_run_exits.size();
+    }
+    mkw_run_exit_overflow.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline std::array<std::atomic<unsigned long long>, 6> evacuations{};
 inline Totals storage;
 inline Totals jit_protection;
 inline Totals rasterizer_draw;
@@ -245,6 +306,15 @@ inline void WaitEnd(unsigned long long tid, unsigned reason, long long now_ns,
     const long long start = wait_threads[slot].start.exchange(0, std::memory_order_relaxed);
     if (start == 0) return;
     const unsigned long long n = static_cast<unsigned long long>(now_ns > start ? now_ns - start : 0);
+    if (tid == 86 && waker_tid < mkw_main_wakers.size()) {
+        mkw_main_wakers[waker_tid].calls.fetch_add(1, std::memory_order_relaxed);
+        mkw_main_wakers[waker_tid].nanoseconds.fetch_add(n, std::memory_order_relaxed);
+    }
+    if (tid >= 181 && tid <= 191 && waker_tid < 512) {
+        auto& row = mkw_worker_wakers[tid - 181][waker_tid];
+        row.calls.fetch_add(1, std::memory_order_relaxed);
+        row.nanoseconds.fetch_add(n, std::memory_order_relaxed);
+    }
     wait_threads[slot].ns.fetch_add(n, std::memory_order_relaxed);
     wait_threads[slot].calls.fetch_add(1, std::memory_order_relaxed);
     wait_threads[slot].waker.store(waker_tid, std::memory_order_relaxed);
@@ -358,7 +428,7 @@ inline std::array<std::atomic<unsigned long long>, 20> render_conditions{};
 struct IdleCounters {
     std::atomic<unsigned long long> calls{0}, nanoseconds{0}, sleeps{0};
 };
-inline std::array<IdleCounters, 4> guest_idle{};
+inline std::array<IdleCounters, 6> guest_idle{};
 // PAUSE iterations a guest core spins on its interrupt flag before sleeping (~20 ns each on the
 // console). Guest job systems hand work between cores ~150 times a frame; sleeping on each
 // handoff put the host's thread wake-up latency on the critical path. 100 us (the default) took

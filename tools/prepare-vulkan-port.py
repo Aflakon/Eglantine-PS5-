@@ -192,8 +192,10 @@ GraphicsPipeline* prepared_pipeline = nullptr;
 
 template <typename Func>
 void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {'''),
-    ('    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};\n    // update engine as channel may be different.',
+    ('    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};\n    buffer_cache_runtime.BeginReadbackWriteBatch();\n    SCOPE_EXIT { buffer_cache_runtime.AbortReadbackWriteBatch(); };\n    // update engine as channel may be different.',
      '''    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+    buffer_cache_runtime.BeginReadbackWriteBatch();
+    SCOPE_EXIT { buffer_cache_runtime.AbortReadbackWriteBatch(); };
     prepared_pipeline = pipeline;
     SCOPE_EXIT {
         prepared_pipeline = nullptr;
@@ -535,9 +537,45 @@ adapt('src/video_core/vulkan_common/vulkan_memory_allocator.cpp', 'vulkan_memory
 # only when it holds the transfer, and a refused buffer is asked for once more after the kept ones
 # the GPU is done with are let go. A Switch 2 title was refused 512 MiB for a 341 MiB transfer with
 # 480 MiB free. No Finish() when releasing: a buffer handed out earlier may not have its copy recorded.
+adapt('src/video_core/renderer_vulkan/vk_staging_buffer_pool.h',
+      'include/video_core/renderer_vulkan/vk_staging_buffer_pool.h', [
+    ('    void TickFrame();\n', '    void TickFrame();\n    void ReleaseCompleted();\n'),
+])
 adapt('src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp', 'vulkan_staging_buffer_pool.cpp', [
+    ('StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage usage, bool deferred) {',
+     '''StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage usage, bool deferred) {
+    if (static unsigned rows{}; size >= (64ULL << 20) && rows++ < 96) {
+        for (unsigned kind = 0; kind < 3; ++kind) {
+            auto& cache = kind == 0 ? device_local_cache : kind == 1 ? upload_cache : download_cache;
+            size_t count = 0, pinned = 0, busy = 0, free = 0;
+            unsigned long long bytes = 0;
+            for (const auto& level : cache) for (const auto& entry : level.entries) {
+                ++count;
+                bytes += ::Eden::StagingBuffers::Holds(entry.mapped_span.size(), entry.log2_level);
+                if (entry.deferred) ++pinned;
+                else if (scheduler.IsFree(entry.tick)) ++free;
+                else ++busy;
+            }
+            std::fprintf(stderr, "MKW_STAGING_MISS asked=%zu usage=%u deferred=%d kind=%u count=%zu bytes=%llu pinned=%zu busy=%zu free=%zu tick=%llu completed=%llu\\n",
+                         size, unsigned(usage), int(deferred), kind, count, bytes, pinned, busy, free,
+                         static_cast<unsigned long long>(scheduler.CurrentTick()),
+                         static_cast<unsigned long long>(scheduler.GetMasterSemaphore().KnownGpuTick()));
+        }
+    }
+'''),
     ('#include "video_core/vulkan_common/vulkan_wrapper.h"\n',
      '#include "video_core/vulkan_common/vulkan_wrapper.h"\n#include <atomic>\n#include <cstdio>\n#include "staging_buffers.h"\n'),
+    ('void StagingBufferPool::TickFrame() {',
+     'void StagingBufferPool::ReleaseCompleted() {\n'
+     '    const auto idle = [this](const StagingBuffer& entry) {\n'
+     '        return !entry.deferred && scheduler.IsFree(entry.tick);\n'
+     '    };\n'
+     '    for (StagingBuffersCache* const cache : {&device_local_cache, &upload_cache, &download_cache}) {\n'
+     '        for (StagingBuffers& level : *cache) {\n'
+     '            ::Eden::StagingBuffers::ReleaseFrom(level, idle);\n'
+     '        }\n'
+     '    }\n'
+     '}\n\nvoid StagingBufferPool::TickFrame() {'),
     ('    const auto is_free = [this](const StagingBuffer& entry) {\n'
      '        return !entry.deferred && scheduler.IsFree(entry.tick);\n'
      '    };',
@@ -615,6 +653,16 @@ adapt('src/video_core/vulkan_common/vulkan_device.cpp', 'vulkan_device.cpp', [
      '                                 : 1.0;\n'
      '        const u64 free_bytes = static_cast<u64>(static_cast<double>(free_memory()) * scale);\n'
      '        return device_access_memory > free_bytes ? device_access_memory - free_bytes : 0;\n'
+     '    }\n'),
+    # Usage above is expressed against device_access_memory, not the driver's
+    # changing heap budget. Keep both sides of the cache's pressure comparison
+    # in that same domain; the shared-pool free callback already reflects CPU
+    # allocations and fragmentation.
+    ('u64 Device::GetDeviceMemoryBudget() const {\n',
+     'u64 Device::GetDeviceMemoryBudget() const {\n'
+     '    if (::Eden::Performance::graphics_memory_free.load(std::memory_order_relaxed) &&\n'
+     '        ::Eden::Performance::graphics_usage_from_pool.load(std::memory_order_relaxed)) {\n'
+     '        return device_access_memory;\n'
      '    }\n'),
     ('    extensions.descriptor_buffer = features.descriptor_buffer.descriptorBuffer;',
      '    extensions.descriptor_buffer = features.descriptor_buffer.descriptorBuffer &&\n'
@@ -743,8 +791,8 @@ adapt('src/video_core/renderer_vulkan/vk_scheduler.cpp', 'vulkan_scheduler.cpp',
     ('        .pInheritanceInfo = nullptr,\n    });\n    current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());',
      '        .pInheritanceInfo = nullptr,\n    });\n    GpuTimeBegin(device, current_cmdbuf);\n'
      '    current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());'),
-    ('        upload_cmdbuf.End();\n        cmdbuf.End();\n',
-     '        upload_cmdbuf.End();\n        GpuTimeEnd(cmdbuf);\n        cmdbuf.End();\n'),
+    ('        cmdbuf.End();\n\n        if (on_submit)',
+     '        GpuTimeEnd(cmdbuf);\n        cmdbuf.End();\n\n        if (on_submit)'),
     ('            vk::Check(result);\n            break;\n        }\n    });\n    chunk->MarkSubmit();',
      '            vk::Check(result);\n            break;\n        }\n        GpuTimeCollect(device);\n    });\n    chunk->MarkSubmit();'),
     ('    const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);\n'
@@ -910,7 +958,9 @@ gc_setup = '''    const auto ReclaimedBytes = [&](const Image& image) {
     };
 ''' + (port / 'vulkan_gc_downloads.inc').read_text()
 for old, new in [
-    ('    const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode]',
+    ('    const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,\n'
+     '                          &probe_estimated, &probe_actual, &probe_deletes, &probe_scanned,\n'
+     '                          &probe_costly_skips, &probe_dirty_skips, &probe_decoding_skips]',
      gc_setup + '\n    const auto Cleanup = [&, this]'),
     ('        if (must_download) {', '        if (must_download && !TakePrefetched(image_id, image)) {'),
     # Time the per-image drain Cleanup still takes for an image the prefetch could not batch.
@@ -980,6 +1030,15 @@ adapt('src/video_core/texture_cache/texture_cache.h',
 # the texture-buffer loop looked like the cost of bind and measured 2.8%.
 adapt('src/video_core/buffer_cache/buffer_cache.h',
       'vulkan-cache/video_core/buffer_cache/buffer_cache.h', [
+    ('        if (buffer_bytes >= 1_GiB) {\n'
+     '            RunGarbageCollector(buffer_bytes >= 2_GiB);\n'
+     '        }\n',
+     '        const auto pressure = ::Eden::Performance::graphics_memory_probe.load(std::memory_order_relaxed);\n'
+     '        const bool memory_short = frame_tick >= 60 && pressure && pressure();\n'
+     '        if (buffer_bytes >= 1_GiB || memory_short) {\n'
+     '            RunGarbageCollector(memory_short || buffer_bytes >= 2_GiB);\n'
+     '        }\n'),
+    ('++frames % 600 == 0', '++frames % 60 == 0'),
     ('#include "video_core/buffer_cache/buffer_cache_base.h"',
      '#include "video_core/buffer_cache/buffer_cache_base.h"\n#include "performance.h"'),
     ('void BufferCache<P>::BindHostGeometryBuffers(bool is_indexed) {',
@@ -1222,6 +1281,27 @@ probes = {
     # With custom border colours off (the console default), report which clamp-to-border
     # samplers ask for a colour the three standard ones cannot give exactly.
     'vk_texture_cache': [
+        ('void TextureCacheRuntime::TranscodeAstcToBcn(\n'
+         '    Image& image, const StagingBufferRef& map,\n'
+         '    std::span<const VideoCommon::SwizzleParameters> swizzles) {\n',
+         'void TextureCacheRuntime::TranscodeAstcToBcn(\n'
+         '    Image& image, const StagingBufferRef& map,\n'
+         '    std::span<const VideoCommon::SwizzleParameters> swizzles) {\n'
+         '    ::Eden::Performance::Timer mkw_timer(::Eden::Performance::mkw_transcode);\n'),
+        # Decode images can otherwise survive a long loading burst until TickFrame. At this
+        # boundary every use of the input and output staging buffers has been recorded, so a
+        # wait is safe (unlike a wait inside an arbitrary staging-buffer allocation).
+        ('    pending_transcodes.push_back(std::move(pending));\n',
+         '    pending_transcodes.push_back(std::move(pending));\n'
+         '    const auto memory_short = ::Eden::Performance::graphics_memory_probe.load(std::memory_order_relaxed);\n'
+         '    if (memory_short && memory_short()) {\n'
+         '        ::Eden::Performance::Timer finish_timer(::Eden::Performance::mkw_transcode_finish);\n'
+         '        scheduler.Finish();\n'
+         '        while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {\n'
+         '            pending_transcodes.pop_front();\n'
+         '        }\n'
+         '        staging_buffer_pool.ReleaseCompleted();\n'
+         '    }\n'),
         ('#include <algorithm>', '#include <algorithm>\n#include <cstdio>\n#include "dev_vulkan.h"\n#include "diagnostics.h"'),
         ('    has_custom_border_colors = samples_border && device.IsCustomBorderColorUsable();',
          '    if (::Eden::DevVulkan::trace_pipelines && samples_border) {\n'
@@ -1243,7 +1323,7 @@ probes = {
     ],
 }
 for name, index, expected in (
-    ('vk_fence_manager', 6, 1), ('vk_buffer_cache', 7, 3),
+    ('vk_fence_manager', 6, 1), ('vk_buffer_cache', 7, 6),  # three diagnostic mapped-readback probe waits
     ('vk_texture_cache', 8, 1), ('vk_swapchain', 9, 6),
     ('vk_descriptor_buffer', 10, 2), ('vk_multi_range_buffer', 11, 1),
     ('vk_compute_pass', 12, 1),

@@ -40,6 +40,10 @@ void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept;
 void SparseUsage(std::size_t* reserved, std::size_t* committed) noexcept;
 } // namespace Common
 
+#ifdef PS5_NATIVE
+#include "mkw_native_sample.inc"
+#endif
+
 namespace Eden::Performance {
 namespace {
 constexpr std::array names{"CPUCore_0", "CPUCore_1", "CPUCore_2", "CPUCore_3",
@@ -693,6 +697,9 @@ void ReportGpuThread(unsigned frame) {
 }
 
 void RegisterWorker(const char* name) {
+#ifdef PS5_NATIVE
+    MkwNativeSample::Register(name);
+#endif
     Eden::Crash::NameThread(name);  // a crash report names the thread
 #if defined(EDEN_DEV_PROFILE) && defined(PS5_NATIVE)
     Eden::Stall::NoteThread(name);
@@ -1164,3 +1171,5 @@ extern "C" void eden_jit_compile(unsigned core, unsigned long long ns) {
     Eden::Performance::compilation[core].calls.fetch_add(1, std::memory_order_relaxed);
     Eden::Performance::compilation[core].nanoseconds.fetch_add(ns, std::memory_order_relaxed);
 }
+
+#include "ordered_read_trace.inc"

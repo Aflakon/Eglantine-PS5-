@@ -47,6 +47,7 @@ cmake -S "$scratch/source" -B "$scratch/native-local" -G Ninja \
     -DEDEN_DEV_VULKAN="${EDEN_DEV_VULKAN:-OFF}" \
     -DCMAKE_C_COMPILER_LAUNCHER="$cache" -DCMAKE_CXX_COMPILER_LAUNCHER="$cache" \
     -DEDEN_DEV_ROM_ID="${EDEN_DEV_ROM_ID:-}" \
+    -DEDEN_MKW_DIAGNOSTICS="${EDEN_MKW_DIAGNOSTICS:-OFF}" \
     -DEDEN_DEV_PROFILE="${EDEN_DEV_PROFILE:-OFF}" \
     -DEDEN_DEV_PROFILE_TITLE="${EDEN_DEV_PROFILE_TITLE:-$(cat "$root/.local/dev-profile-title" 2>/dev/null || true)}" \
     -DEDEN_DEV_WAIT_CALLERS="${EDEN_DEV_WAIT_CALLERS:-OFF}" \
@@ -101,6 +102,9 @@ fi
 if [[ "$graphics" == ON ]]; then
     python3 -B "$root/tools/check-native-gpu-thread.py"
     python3 -B "$root/tools/check-gpu-producer-stop.py"
+    if [[ "${EDEN_PS5_VULKAN:-OFF}" == ON ]]; then
+        python3 -B "$root/tools/check-staging-pressure.py"
+    fi
     python3 -B "$root/tools/check-gpu-sync-stop.py"
     python3 -B "$root/tools/check-nvdrv-process-lifetime.py"
     python3 -B "$root/tools/check-integer-buffer-clear.py"

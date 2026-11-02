@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "performance.h"
+#include "ordered_read_trace.h"
 #include "assets_dir.h"
 #include <glad/glad.h>
 #include <EGL/egl.h>
@@ -649,6 +650,9 @@ void GraphicsWindow::OnFrameDisplayed() {
                             RoomPingMilliseconds());
 #endif
         ++frame_total;
+        Eden::OrderedReadTrace::Frame(frame_total,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
         // What a recorded controller session counts frames by (gameplay_test.h): the input
         // worker runs on another thread, so it reads a copy rather than the member.
         Display::gameplay_frame.store(frame_total, std::memory_order_relaxed);
