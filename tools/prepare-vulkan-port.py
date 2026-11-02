@@ -783,13 +783,22 @@ adapt('src/video_core/renderer_vulkan/vk_scheduler.cpp', 'vulkan_scheduler.cpp',
 
     ('#include <memory>', '#include <memory>\n#include <array>\n#include <chrono>\n#include <cstdio>\n#include "dev_vulkan.h"\nextern "C" bool eden_vulkan_handoff_enabled();'),
     ('namespace Vulkan {\n', 'namespace Vulkan {\n' + GPU_TIME_HELPERS),
-    ('        .pInheritanceInfo = nullptr,\n    });\n    current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());',
-     '        .pInheritanceInfo = nullptr,\n    });\n    GpuTimeBegin(device, current_cmdbuf);\n'
-     '    current_upload_cmdbuf = vk::CommandBuffer(command_pool->Commit(), device.GetDispatchLoader());'),
+    ('        .pInheritanceInfo = nullptr,\n    });\n}\n\nu64 Scheduler::SubmitExecution(',
+     '        .pInheritanceInfo = nullptr,\n    });\n    GpuTimeBegin(device, current_upload_cmdbuf);\n}\n\nu64 Scheduler::SubmitExecution('),
+    ('u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {',
+     'u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {\n'
+     '    GpuSubmitOriginScope origin{__builtin_return_address(0), false};'),
+    ('void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {',
+     'void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {\n'
+     '    GpuSubmitOriginScope origin{__builtin_return_address(0), true};'),
+    ('    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,',
+     '    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,\n'
+     '                            submit_origin = gpu_submit_origin,'),
     ('        cmdbuf.End();\n\n        if (on_submit)',
      '        GpuTimeEnd(cmdbuf);\n        cmdbuf.End();\n\n        if (on_submit)'),
     ('            vk::Check(result);\n            break;\n        }\n    });\n    chunk->MarkSubmit();',
-     '            vk::Check(result);\n            break;\n        }\n        GpuTimeCollect(device);\n    });\n    chunk->MarkSubmit();'),
+     '            vk::Check(result);\n            break;\n        }\n'
+     '        GpuTimeCountOrigin(submit_origin);\n        GpuTimeCollect(device);\n    });\n    chunk->MarkSubmit();'),
     ('    const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);\n'
      '    AllocateNewContext();\n    return signal_value;',
      '    const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);\n'

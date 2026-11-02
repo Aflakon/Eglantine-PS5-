@@ -1,7 +1,21 @@
 namespace {
 // Development GPU execution time (dev_vulkan.h gpu_time): timestamps at the start and end
-// of every scheduler command buffer, summed once the GPU has run them and printed every
-// 5 s as EDEN_GPU_TIME. Worker thread only.
+// of each upload+graphics submission, summed once the GPU has run it and printed every
+// 5 s as EDEN_GPU_TIME. Probe/counters are worker-thread-only. Origin is captured on
+// the recording thread, then copied into the submission command.
+struct GpuSubmitOrigin {
+    const void* caller{};
+    bool finish{};
+};
+thread_local GpuSubmitOrigin gpu_submit_origin;
+struct GpuSubmitOriginScope {
+    GpuSubmitOrigin saved{};
+    bool enabled{::Eden::DevVulkan::gpu_time};
+    GpuSubmitOriginScope(const void* caller, bool finish) {
+        if (enabled) saved = std::exchange(gpu_submit_origin, GpuSubmitOrigin{caller, finish});
+    }
+    ~GpuSubmitOriginScope() { if (enabled) gpu_submit_origin = saved; }
+};
 struct GpuTimeProbe {
     static constexpr u32 SLOTS = 512;
     vk::QueryPool pool;
@@ -13,7 +27,24 @@ struct GpuTimeProbe {
     u64 busy_ns{}, max_ns{}, submissions{}, total_ns{}, total_submissions{};
     std::chrono::steady_clock::time_point report{};
     bool failed{};
+    struct OriginCount { GpuSubmitOrigin origin; u64 count{}; };
+    std::array<OriginCount, 64> origins{};
+    u32 origin_slots{};
+    u64 origin_overflow{};
 } gpu_time;
+
+void GpuTimeCountOrigin(GpuSubmitOrigin origin) {
+    if (!::Eden::DevVulkan::gpu_time || gpu_time.failed) return;
+    for (u32 i = 0; i < gpu_time.origin_slots; ++i) {
+        auto& row = gpu_time.origins[i];
+        if (row.origin.caller == origin.caller && row.origin.finish == origin.finish) {
+            ++row.count;
+            return;
+        }
+    }
+    if (gpu_time.origin_slots == gpu_time.origins.size()) { ++gpu_time.origin_overflow; return; }
+    gpu_time.origins[gpu_time.origin_slots++] = {origin, 1};
+}
 
 void GpuTimeBegin(const Device& device, vk::CommandBuffer cmdbuf) {
     if (!::Eden::DevVulkan::gpu_time || gpu_time.failed) return;
@@ -37,6 +68,8 @@ void GpuTimeBegin(const Device& device, vk::CommandBuffer cmdbuf) {
         gpu_time.report = std::chrono::steady_clock::now();
         std::printf("EDEN_GPU_TIME_INIT period_ns=%.9f valid_bits=%u slots=%u\n",
                     gpu_time.period_ns, gpu_time.valid_bits, GpuTimeProbe::SLOTS);
+        std::printf("EDEN_GPU_SUBMIT_ANCHOR address=%p coverage=upload+graphics\n",
+                    reinterpret_cast<void*>(&GpuTimeCountOrigin));
     }
     if (gpu_time.next - gpu_time.first_pending >= GpuTimeProbe::SLOTS) {
         gpu_time.failed = true; // results stopped arriving; never overwrite a pending slot
@@ -78,6 +111,18 @@ void GpuTimeCollect(const Device& device) {
                     static_cast<unsigned long long>(gpu_time.total_submissions),
                     static_cast<unsigned long long>(gpu_time.next - gpu_time.first_pending));
         gpu_time.busy_ns = gpu_time.max_ns = gpu_time.submissions = 0;
+        u64 origin_total = gpu_time.origin_overflow;
+        for (u32 i = 0; i < gpu_time.origin_slots; ++i) {
+            auto& row = gpu_time.origins[i];
+            origin_total += row.count;
+            if (row.count) std::printf("EDEN_GPU_SUBMIT_ORIGIN caller=%p finish=%d count=%llu\n",
+                row.origin.caller, int(row.origin.finish), static_cast<unsigned long long>(row.count));
+            row.count = 0;
+        }
+        std::printf("EDEN_GPU_SUBMIT_TOTAL count=%llu overflow=%llu\n",
+                    static_cast<unsigned long long>(origin_total),
+                    static_cast<unsigned long long>(gpu_time.origin_overflow));
+        gpu_time.origin_overflow = 0;
         gpu_time.report = now;
     }
 }

@@ -224,3 +224,38 @@ and verified after these runs. Raw console/game captures remain excluded.
 Next measurements should cover upload plus graphics work and classify actual
 submission initiators alongside each frame's waits. Allocation fragmentation
 and sustained Free Roam stability remain open before any 40 FPS claim.
+
+Follow-up: upload-plus-graphics spans and submission callers
+Run 1793660399464408198 (fresh PID 640) moved the start timestamp to the upload
+command buffer, retaining the end timestamp in graphics. Both submission APIs
+place uploads first. Bounded caller counters capture recording-thread origins
+by value and count successful worker submissions; overflow is explicit. The
+matched ELF and runtime anchor resolve ASLR. Optimized tail calls can omit
+intermediate callers, so attribution is not a complete stack.
+
+Viewed title, menu, Free Roam and late Free Roam showed Shy Guy Bazaar scenery,
+road, kart, minimap and moving NPC traffic. Ten complete traced frames measured
+12.1411 FPS and 280.6 ordered reads/frame, without dropped read/copy events.
+Summed read-call time was 513.596 ms, frontend queue 461.393 ms, backend queue
+5.014 ms and GPU wait API 3.378 ms across those frames. Individual calls had
+median 0.025098 ms, p95 0.044823 ms and maximum 44.146885 ms. CPU durations
+overlap across threads. One semaphore site contributed 84.19% of call time,
+one read/frame, and changed value on all ten observations. Most other reads
+were short and unchanged. Clean-at-service alone cannot justify bypassing
+the dominant dependency. Both GPU and CPU copy totals were 12,735,088 bytes.
+
+The last three complete GPU windows after entering Free Roam covered 15.0036 s:
+30,751 submissions, no caller overflow and 1.4575 s upload-plus-graphics spans.
+24,083 submissions came through FenceManager::QueueFence, 4,800 through buffer
+Finish, 1,111 through DmaPusher::DispatchCalls, 552 through texture Finish,
+184 through presentation and 21 through transcode pressure completion. This
+is about 2,050 submissions/s. Inter-submission gaps and other work remain
+outside the timestamps; query overhead prevents an uninstrumented FPS claim.
+
+The diagnostic native build/package, sanitizer fixtures and allocator-header
+checks passed. The run ended at its planned observation with no fresh crash;
+largest free physical block was still only 197 MiB near the end. This is no
+sustained stability or movement-input test. Original console files/settings
+and input controls were restored and verified. The 40 FPS goal remains open.
+Next distinguish buffer/texture/query fence requirements and the callers of
+runtime Finish before changing batching or guest completion ordering.

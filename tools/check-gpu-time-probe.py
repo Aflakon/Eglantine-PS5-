@@ -10,6 +10,7 @@ code=r'''
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <thread>
 #include <utility>
 #include <vector>
 using u32=unsigned;using u64=uint64_t;
@@ -58,12 +59,29 @@ struct Device {
 };
 '''+(root/'headless/gpu_time_probe.inc').read_text()+r'''
 int main(){Device d;vk::CommandBuffer cmd;
+ auto caller=reinterpret_cast<const void*>(uintptr_t(0x1234));
+ {GpuSubmitOriginScope one{caller,false};assert(gpu_submit_origin.caller==caller&&!gpu_submit_origin.finish);
+  {GpuSubmitOriginScope two{nullptr,true};assert(!gpu_submit_origin.caller&&gpu_submit_origin.finish);}
+  assert(gpu_submit_origin.caller==caller&&!gpu_submit_origin.finish);
+  std::thread other{[]{assert(!gpu_submit_origin.caller&&!gpu_submit_origin.finish);}};other.join();
+ }
+ assert(!gpu_submit_origin.caller);
+ GpuTimeCountOrigin({caller,false});GpuTimeCountOrigin({caller,false});GpuTimeCountOrigin({caller,true});
+ assert(gpu_time.origin_slots==2&&gpu_time.origins[0].count==2&&gpu_time.origins[1].count==1);
+ for(uintptr_t i=1;i<=63;++i)GpuTimeCountOrigin({reinterpret_cast<void*>(i),false});
+ assert(gpu_time.origin_slots==64&&gpu_time.origin_overflow==1);
+ gpu_time.report=std::chrono::steady_clock::now()-std::chrono::seconds{6};
+ GpuTimeCollect(d); // no pool yet; leaves counts intact
+ assert(gpu_time.origins[0].count==2);
  Eden::DevVulkan::gpu_time=false;GpuTimeBegin(d,cmd);assert(state.creates==0);GpuTimeReset(d);assert(state.waits==0);
+ {GpuSubmitOriginScope off{caller,true};assert(!gpu_submit_origin.caller);}GpuTimeCountOrigin({caller,false});assert(!gpu_time.origin_slots);
  Eden::DevVulkan::gpu_time=true;
  GpuTimeBegin(d,cmd);GpuTimeEnd(cmd);GpuTimeBegin(d,cmd);GpuTimeEnd(cmd);
  assert(state.creates==1&&state.resets==2&&state.writes==4);
  state.ready=false;GpuTimeCollect(d);assert(gpu_time.first_pending==0);
  state.ready=true;GpuTimeCollect(d);assert(gpu_time.total_ns==26&&gpu_time.total_submissions==1); // 8-bit wrap: (7-250)&255 = 13
+ GpuTimeCountOrigin({caller,false});gpu_time.report=std::chrono::steady_clock::now()-std::chrono::seconds{6};GpuTimeCollect(d);
+ assert(gpu_time.origin_slots==1&&!gpu_time.origins[0].count&&!gpu_time.origin_overflow);
  GpuTimeReset(d);assert(state.waits==1&&state.destroys==1&&!gpu_time.pool&&gpu_time.next==0);
  state.ready=false;
  for(unsigned i=0;i<GpuTimeProbe::SLOTS;++i){GpuTimeBegin(d,cmd);GpuTimeEnd(cmd);}
@@ -78,6 +96,6 @@ int main(){Device d;vk::CommandBuffer cmd;
 '''
 with tempfile.TemporaryDirectory(prefix='gpu-time-probe-')as temp:
  p=Path(temp);(p/'check.cpp').write_text(code)
- subprocess.run(['clang++-18','-std=c++20','-O1','-g','-fsanitize=address,undefined',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
+ subprocess.run(['clang++-18','-std=c++20','-O1','-g','-pthread','-fsanitize=address,undefined',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
  subprocess.run([str(p/'check')],check=True,timeout=10)
-print('GPU timestamp probe PASS: disabled path, readiness without wait, timestamp wrap, bounded ring, reset/relaunch and pool-before-device destruction')
+print('GPU timestamp probe PASS: disabled path, thread-local origin scopes, bounded caller counts, readiness without wait, timestamp wrap, bounded ring, reset/relaunch and pool-before-device destruction')
