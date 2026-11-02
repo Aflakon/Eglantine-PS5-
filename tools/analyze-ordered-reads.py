@@ -65,6 +65,10 @@ def analyze(prefix):
         r['duration_ns'] = end - begin
         r['park_ns'] = we - wb if we else 0
         r['queue_ns'] = max(0, r['backend_start_ns'] - r['enqueued_ns']) if r['backend_start_ns'] else 0
+        r['front_queue_ns'] = max(0, r['front_popped_ns'] - r['enqueued_ns']) if r['front_popped_ns'] else 0
+        r['backend_queue_ns'] = max(0, r['backend_start_ns'] - r['front_popped_ns']) if r['backend_start_ns'] and r['front_popped_ns'] else 0
+        if r['backend_start_ns'] and r['front_popped_ns']:
+            assert r['queue_ns'] == r['front_queue_ns'] + r['backend_queue_ns']
         r['service_ns'] = max(0, r['flush_end_ns'] - r['backend_start_ns'])
         r['resume_ns'] = max(0, end - r['flush_end_ns']) if r['flush_end_ns'] else 0
         # Stronger candidate filter; still requires a real prequeue dependency proof before a bypass.
@@ -102,6 +106,8 @@ def analyze(prefix):
                            started_total_us=sum(durations)/1e3, p50_call_us=percentile(durations, .5)/1e3,
                            p95_call_us=percentile(durations, .95)/1e3, max_call_us=max(durations, default=0)/1e3,
                            queue_total_us=sum(r['queue_ns'] for r in values)/1e3,
+                           front_queue_total_us=sum(r['front_queue_ns'] for r in values)/1e3,
+                           backend_queue_total_us=sum(r['backend_queue_ns'] for r in values)/1e3,
                            service_total_us=sum(r['service_ns'] for r in values)/1e3,
                            resume_total_us=sum(r['resume_ns'] for r in values)/1e3,
                            clean_at_service=sum(r['dirty_mask'] == 0 for r in values),
@@ -122,6 +128,8 @@ def analyze(prefix):
                           ordered_bytes=size, dirty_mask=dirty, count=len(values), total_us=sum(d)/1e3,
                           p50_us=percentile(d, .5)/1e3, p95_us=percentile(d, .95)/1e3,
                           max_us=max(d)/1e3, queue_us=sum(v['queue_ns'] for v in values)/1e3,
+                          front_queue_us=sum(v['front_queue_ns'] for v in values)/1e3,
+                          backend_queue_us=sum(v['backend_queue_ns'] for v in values)/1e3,
                           service_us=sum(v['service_ns'] for v in values)/1e3,
                           resume_us=sum(v['resume_ns'] for v in values)/1e3))
     types.sort(key=lambda r: r['total_us'], reverse=True)
@@ -138,6 +146,8 @@ def analyze(prefix):
     result = dict(frames=nframes, records=len(reads), dropped=0, starts_outside_timestamp_window=outside,
                   seconds=(times[-1]-times[0])/1e9, fps=nframes*1e9/(times[-1]-times[0]),
                   waits_per_frame=len(reads)/nframes,
+                  front_queue_cpu_ms=sum(r['front_queue_ns'] for r in reads)/1e6,
+                  backend_queue_cpu_ms=sum(r['backend_queue_ns'] for r in reads)/1e6,
                   total_call_cpu_ms=sum(r['duration_ns'] for r in reads)/1e6,
                   total_parked_cpu_ms=sum(r['park_ns'] for r in reads)/1e6,
                   clean_at_service=sum(r['dirty_mask']==0 for r in reads),
@@ -223,7 +233,9 @@ def analyze(prefix):
              original_address=hex(r['original_address']), original_bytes=r['original_size'],
              ordered_address=hex(r['address']), ordered_bytes=r['size'],
              duration_us=r['duration_ns']/1e3, completion_wait_us=r['park_ns']/1e3,
-             queue_us=r['queue_ns']/1e3, service_us=r['service_ns']/1e3,
+             queue_us=r['queue_ns']/1e3,
+             front_queue_us=r['front_queue_ns']/1e3, backend_queue_us=r['backend_queue_ns']/1e3,
+             service_us=r['service_ns']/1e3,
              resume_us=r['resume_ns']/1e3, dirty_mask=r['dirty_mask'],
              buffer_gpu_copy_bytes=r.get('buffer_gpu_copy_bytes',0),
              buffer_cpu_copy_bytes=r.get('buffer_cpu_copy_bytes',0),

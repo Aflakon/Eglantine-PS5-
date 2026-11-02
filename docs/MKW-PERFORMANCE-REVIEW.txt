@@ -107,3 +107,27 @@ slots to fix an out-of-bounds read exposed by this fixture. See the PR descripti
 AI assistance
 Implementation, analysis, review preparation and this report were assisted
 by OpenAI Codex. Human review is required before merging this research draft.
+
+Follow-up: separate frontend and backend queue delay
+Reanalyzed all five complete candidate-41 captures (75 frames, 17,238 reads)
+without modifying the original evidence. Total queue delay partitions into
+3,064.440 ms before frontend pop and 30.657 ms between pop and backend start.
+Total read-call time across threads was 3,396.993 ms. The analyzer now exports
+both partitions per read, per frame and per read type, and checks their sum
+against the existing queue duration whenever all timestamps are present.
+These are overlapping thread durations, not a frame-wall-time decomposition.
+
+The main semaphore site (guest PC 0x856894d0 at observational guest address
+0x2106235000) accounts for 74–85% of each window's call time; another PC at
+the same address adds time in two windows. Most observations changed value.
+The longest read took 40.186 ms, including 40.160 ms before pop, about 1.8 us
+between pop and service, and 8.9 us in service. A clean cache at service does
+not prove that these reads could safely bypass earlier commands.
+
+An older candidate-38 Free Roam profile contains Vulkan command handoff,
+macro processing and fence-drain waits ahead of reads. It is not synchronous
+with candidate-41 events, so it does not attribute each long read to a specific
+command. Next runtime evidence should correlate preceding-command execution
+with each long read, including forced fence drains and command handoffs.
+No frame-rate gain is claimed from this analyzer change. Read-only console
+status was idle during this follow-up; no deployment or restart was performed.
