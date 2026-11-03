@@ -89,6 +89,14 @@ file(READ "${PROJECT_SOURCE_DIR}/src/common/host_memory.h" port_host_memory_head
 if(port_host_memory_header MATCHES "enum class BackingMode")
     target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_BACKING_MODE=1)
 endif()
+# Newer cores track which pages of the backing are still zero (MarkUsed, MarkDirty, ForgetContents)
+# and let callers hint cold memory (HintCold); the port's backing clears through its own service.
+if(port_host_memory_header MATCHES "void MarkUsed\\(")
+    target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_MARK_API=1)
+endif()
+if(port_host_memory_header MATCHES "void HintCold\\(")
+    target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_HINT_COLD=1)
+endif()
 
 # Eden's large tables (the guest page table, the GPU's address tables) stay sparse on the PS5:
 # their vector reserves its range with AllocateSparsePages and announces a first write to
