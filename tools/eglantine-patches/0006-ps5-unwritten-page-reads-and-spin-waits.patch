@@ -150,6 +150,96 @@ index 91c5bf8..ce2cc17 100644
              if (current_area.start_address <= address && end_address <= current_area.end_address)
                  [[likely]] {
                  diagnostics.Add(Event::AreaHit);
+diff --git a/src/tests/video_core/nx2_command_sync.cpp b/src/tests/video_core/nx2_command_sync.cpp
+index 5e32d64..66305ed 100644
+--- a/src/tests/video_core/nx2_command_sync.cpp
++++ b/src/tests/video_core/nx2_command_sync.cpp
+@@ -46,9 +46,10 @@ TEST_CASE("A new session forgets the pages the previous one wrote",
+     }
+ }
+ 
+-TEST_CASE("Command synchronization drains a page's first queued GPU write before checking it",
++TEST_CASE("Command synchronization drains and flushes only a list on a page the GPU wrote",
+           "[video_core][nx2_command_sync]") {
+     Tegra::Nx2ClearGpuWrittenPages();
++    Tegra::Nx2MarkGpuWritten(8 * Page, sizeof(u32));
+     u32 host_word = 0;
+     u32 gpu_word = 0;
+     bool drained = false;
+@@ -57,12 +58,8 @@ TEST_CASE("Command synchronization drains a page's first queued GPU write before
+         [&] {
+             drained = true;
+             gpu_word = 42;
+-            Tegra::Nx2MarkGpuWritten(8 * Page, sizeof(u32));
+-        },
+-        [&](GPUVAddr page) {
+-            REQUIRE(drained);
+-            return std::optional{page};
+         },
++        [](GPUVAddr page) { return std::optional{page}; },
+         [&] {
+             REQUIRE(drained);
+             flushed = true;
+@@ -72,7 +69,7 @@ TEST_CASE("Command synchronization drains a page's first queued GPU write before
+     REQUIRE(host_word == 42);
+ }
+ 
+-TEST_CASE("Command synchronization skips clean-page flushes but still drains queued work",
++TEST_CASE("Command synchronization neither drains nor flushes a clean command page",
+           "[video_core][nx2_command_sync]") {
+     Tegra::Nx2ClearGpuWrittenPages();
+     u32 drains = 0;
+@@ -82,5 +79,5 @@ TEST_CASE("Command synchronization skips clean-page flushes but still drains que
+             [](GPUVAddr page) { return std::optional{page}; },
+             [] { FAIL("A clean command page must not be flushed"); });
+     }
+-    REQUIRE(drains == 1);
++    REQUIRE(drains == 0);
+ }
+diff --git a/src/video_core/nx2.h b/src/video_core/nx2.h
+index 321c8b4..f62797d 100644
+--- a/src/video_core/nx2.h
++++ b/src/video_core/nx2.h
+@@ -5,6 +5,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cstdlib>
+ #include <atomic>
+ #include <functional>
+ #include <limits>
+@@ -99,12 +100,29 @@ template <typename Translate>
+     }
+ }
+ 
++// Draining the split's back before every command list serialized the two threads: at Mario
++// Kart World's title screen the front waited ~69,000 times a second, a third of its time. The
++// written-page bits are checked first and only a list on a page the GPU has written waits for
++// the back and flushes. A page's first GPU write can still be queued on the back when the front
++// reads a list on it (the bit is set as the back runs the write): that list is read once as it
++// was. EDEN_NX2_DRAIN_FIRST=1 restores the unconditional drain.
+ template <typename Drain, typename Translate, typename Flush>
+ void Nx2SynchronizeGpuWrittenCommands(GPUVAddr address, size_t size, Drain&& drain,
+                                      Translate&& translate, Flush&& flush) {
+     if (size == 0) return;
+-    drain();
+-    if (Nx2HasGpuWrittenPage(address, size, translate)) flush();
++    static const bool drain_first = [] {
++        const char* value = std::getenv("EDEN_NX2_DRAIN_FIRST");
++        return value != nullptr && value[0] == '1';
++    }();
++    if (drain_first) {
++        drain();
++        if (Nx2HasGpuWrittenPage(address, size, translate)) flush();
++        return;
++    }
++    if (Nx2HasGpuWrittenPage(address, size, translate)) {
++        drain();
++        flush();
++    }
+ }
+ 
+ // NVN2 queues release their progress values into the second page of a two-page GPU-accessible
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 index d1f1245..c71faa6 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp

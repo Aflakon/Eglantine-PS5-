@@ -522,6 +522,17 @@ int main(int argc, char** argv) {
                 std::printf("EDEN_ENV %s\n", entry.c_str());
             }
         }
+        // The console's defaults for the core's switches (env.txt above wins). Without a fastmem
+        // arena every guest read of a GPU-tracked page is a call; a Switch 2 title's reads of
+        // pages with nothing to flush answer on the guest core instead of waiting for the GPU
+        // thread, as they do with fastmem (Mario Kart World's title screen: 13 -> 20 FPS). The
+        // three waits poll 300 us before sleeping: a wake-up here is a system call on both sides.
+        for (const auto& [name, value] : {std::pair{"EDEN_NX2_UNSAFE_PREEMPTIVE_READS", "1"},
+                                          std::pair{"EDEN_PS5_READ_SPIN_US", "300"},
+                                          std::pair{"EDEN_PS5_GPU_SPIN_US", "300"},
+                                          std::pair{"EDEN_PS5_WORKER_SPIN_US", "300"}}) {
+            setenv(name, value, 0);
+        }
 #ifdef EDEN_MKW_DIAGNOSTICS
         // Temporary capture for the Mario Kart World loading-screen investigation.
         const auto diagnostic_capture_dir = Eden::LogFile("mkw-gpfifo-" + std::to_string(getpid()));
