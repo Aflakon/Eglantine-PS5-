@@ -525,8 +525,31 @@ index 321c8b4..f62797d 100644
  }
  
  // NVN2 queues release their progress values into the second page of a two-page GPU-accessible
+diff --git a/src/video_core/query_cache/published_semaphore.h b/src/video_core/query_cache/published_semaphore.h
+index 2123271..dc8f5c7 100644
+--- a/src/video_core/query_cache/published_semaphore.h
++++ b/src/video_core/query_cache/published_semaphore.h
+@@ -6,6 +6,7 @@
+ #include <cstdint>
+ #include <limits>
+ #include <mutex>
++#include "common/spin_recursive_mutex.h"
+ #include <optional>
+ 
+ namespace VideoCommon {
+@@ -99,7 +100,9 @@ private:
+         key ^= key >> 31;
+         return key % Capacity;
+     }
+-    std::mutex mutex;
++    // Taken per guest write and per inline upload from several threads for a few instructions:
++    // a sleeping mutex cost the split's back thread a system call whenever a guest core held it.
++    Common::SpinRecursiveMutex mutex;
+     std::array<Entry, Capacity> entries{};
+     std::uint64_t serial{};
+ };
 diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
-index d1f1245..c71faa6 100644
+index d1f1245..5b2a88f 100644
 --- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
 +++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
 @@ -7,6 +7,8 @@
@@ -538,7 +561,23 @@ index d1f1245..c71faa6 100644
  #include <memory>
  #include <mutex>
  #include <thread>
-@@ -324,6 +326,25 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
+@@ -119,6 +121,7 @@ void Scheduler::DispatchWork() {
+         {
+             std::scoped_lock ql{queue_mutex};
+             work_queue.push(std::move(chunk));
++            queued_chunks.fetch_add(1, std::memory_order_acq_rel);
+             wake = worker_waiting;
+         }
+         if (wake) {
+@@ -313,6 +316,7 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
+         }
+ 
+         work = std::move(work_queue.front());
++        queued_chunks.fetch_sub(1, std::memory_order_acq_rel);
+         work_queue.pop();
+         event_cv.notify_all();
+         return true;
+@@ -324,6 +328,28 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
          {
              std::unique_lock lk{queue_mutex};
  
@@ -549,21 +588,44 @@ index d1f1245..c71faa6 100644
 +                const char* text = std::getenv("EDEN_PS5_WORKER_SPIN_US");
 +                return text != nullptr ? std::strtoll(text, nullptr, 10) * 1000 : 0LL;
 +            }();
++            // The poll reads a counter, not the queue: taking the queue mutex every iteration
++            // made the GPU thread's DispatchWork contend for it (a system call per dispatch).
 +            if (spin_ns > 0 && work_queue.empty()) {
++                lk.unlock();
 +                const auto deadline = std::chrono::steady_clock::now() + std::chrono::nanoseconds{spin_ns};
-+                while (work_queue.empty() && !stop_token.stop_requested() &&
-+                       std::chrono::steady_clock::now() < deadline) {
-+                    lk.unlock();
++                u32 spins = 0;
++                while (queued_chunks.load(std::memory_order_acquire) == 0 && !stop_token.stop_requested()) {
 +#if defined(__x86_64__) || defined(_M_X64)
 +                    __builtin_ia32_pause();
 +#endif
-+                    lk.lock();
++                    if ((++spins & 63) == 0 && std::chrono::steady_clock::now() >= deadline) break;
 +                }
++                lk.lock();
 +            }
 +
              // Wait for work.
              event_cv.wait(lk, stop_token, [&] {
                  worker_waiting = !TryPopQueue(work);
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.h b/src/video_core/renderer_vulkan/vk_scheduler.h
+index 867b43d..0ab4629 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.h
++++ b/src/video_core/renderer_vulkan/vk_scheduler.h
+@@ -6,6 +6,7 @@
+ 
+ #pragma once
+ 
++#include <atomic>
+ #include <condition_variable>
+ #include <cstddef>
+ #include <functional>
+@@ -349,6 +350,7 @@ private:
+     std::mutex queue_mutex;
+     std::condition_variable_any event_cv;
+     bool worker_waiting{}; ///< The worker is waiting for work (guarded by queue_mutex)
++    std::atomic<u32> queued_chunks{}; ///< Chunks in work_queue, for the worker's poll without the mutex
+     std::jthread worker_thread;
+ 
+     std::chrono::steady_clock::duration frame_interval{};
 diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
 index 59e4dcb..94ea047 100644
 --- a/src/video_core/texture_cache/texture_cache.h

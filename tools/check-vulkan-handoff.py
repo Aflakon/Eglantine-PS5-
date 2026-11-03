@@ -22,6 +22,7 @@ def method(name):
 code = r'''
 #include <atomic>
 #include <cassert>
+#include <cstdlib>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -52,6 +53,7 @@ struct Event : std::condition_variable_any {
     unsigned notifications{};
     void notify_one() { ++notifications; std::condition_variable_any::notify_one(); }
 };
+using u32 = unsigned;
 struct Drain : std::condition_variable {
     std::atomic<unsigned> notifications{};
     void notify_all() { ++notifications; std::condition_variable::notify_all(); }
@@ -71,6 +73,7 @@ struct Scheduler {
     Drain drain_cv;
     unsigned drain_waiters{};
     bool worker_waiting{};
+    std::atomic<unsigned> queued_chunks{};
     int current_cmdbuf{}, current_upload_cmdbuf{};
     std::jthread worker_thread;
     Scheduler() : worker_thread([this](std::stop_token stop) { WorkerThread(stop); }) {}
