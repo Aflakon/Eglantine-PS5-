@@ -90,6 +90,22 @@ file(READ "${PROJECT_SOURCE_DIR}/src/common/host_memory.h" port_host_memory_head
 if(port_host_memory_header MATCHES "enum class BackingMode")
     target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_BACKING_MODE=1)
 endif()
+if(port_host_memory_header MATCHES "void MarkUsed\\(")
+    target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_ZERO_TRACKING=1)
+endif()
+if(port_host_memory_header MATCHES "void HintCold\\(")
+    target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_COLD_HINT=1)
+endif()
+if(PS5_NATIVE AND EXISTS "${PROJECT_SOURCE_DIR}/src/common/logging.cpp")
+    # The native SDK supports IOFile; upstream's PS4 guard otherwise removes every log sink.
+    file(READ "${PROJECT_SOURCE_DIR}/src/common/logging.cpp" port_logging)
+    string(REPLACE "#ifndef __OPENORBIS__" "#if 1" port_logging "${port_logging}")
+    write_derived("${PORT_BUILD_DIR}/logging.cpp" "${port_logging}")
+    get_target_property(common_sources common SOURCES)
+    list(REMOVE_ITEM common_sources logging.cpp)
+    list(APPEND common_sources "${PORT_BUILD_DIR}/logging.cpp")
+    set_property(TARGET common PROPERTY SOURCES "${common_sources}")
+endif()
 
 # Eden's large tables (the guest page table, the GPU's address tables) stay sparse on the PS5:
 # their vector reserves its range with AllocateSparsePages and announces a first write to
@@ -180,6 +196,8 @@ include("${EDEN_PORT_DIR}/jit-alias.cmake")
         "        , EdenJitAllocator())\n    , constant_pool" code_source "${code_source}")
     string(REPLACE "        , nullptr)\n#endif\n    , constant_pool"
         "        , EdenJitAllocator())\n#endif\n    , constant_pool" code_source "${code_source}")
+    string(REPLACE "        , CodeAllocator())\n    , constant_pool"
+        "        , EdenJitAllocator())\n    , constant_pool" code_source "${code_source}")
     string(FIND "${code_source}" ", EdenJitAllocator())" port_jit_allocator)
     if(port_jit_allocator LESS 0)
         message(FATAL_ERROR "JIT allocator adapter did not apply")
@@ -2253,7 +2271,19 @@ if(EDEN_PS5_OPENGL)
     string(PREPEND gpu_source "#include <glad/glad.h>\n")
     write_derived("${PORT_BUILD_DIR}/include/video_core/gpu_thread.h" "${gpu_thread_header}")
     target_include_directories(video_core BEFORE PRIVATE "${PORT_BUILD_DIR}/include")
-    string(REPLACE "    ~Impl() = default;" "    ~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }" gpu_source "${gpu_source}")
+    string(FIND "${gpu_source}" "    ~Impl() = default;" gpu_default_destructor)
+    if(NOT gpu_default_destructor LESS 0)
+        string(REPLACE "    ~Impl() = default;" "    ~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }" gpu_source "${gpu_source}")
+    else()
+        set(gpu_destructor_anchor "    ~Impl() {\n        NotifyShutdown();\n")
+        string(FIND "${gpu_source}" "${gpu_destructor_anchor}" gpu_destructor_offset)
+        if(gpu_destructor_offset LESS 0)
+            message(FATAL_ERROR "Pinned GPU destructor changed")
+        endif()
+        string(REPLACE "${gpu_destructor_anchor}"
+            "${gpu_destructor_anchor}        if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); }\n"
+            gpu_source "${gpu_source}")
+    endif()
     # Join before unique_ptr destruction clears GPU::impl: queued draws call back
     # through GPU::TickWork. NotifyShutdown also protects service-owned state.
     # Eden joins its worker first; here the waiters are woken first, so that a guest thread waiting
