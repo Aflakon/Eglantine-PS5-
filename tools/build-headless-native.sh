@@ -42,6 +42,9 @@ cdeps="$EDEN_NATIVE_C_DEPS"
 test -f "$cdeps/lib/libcrypto.a"
 ffmpeg="$scratch/ffmpeg-native/install"
 test -f "$ffmpeg/lib/libavcodec.a" || { echo 'Run tools/build-headless-ffmpeg.sh first.' >&2; exit 1; }
+# EDEN_CPU_PRESET=zen2: the toolchain file compiles the emulator for the console's own CPU
+# (AVX2, BMI2, ...) instead of generic x86-64; the driver archive is prebuilt and unaffected.
+# The flags are cached at the first configure: a change needs a fresh build directory.
 cmake -S "$scratch/source" -B "$scratch/native-local" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$root/headless/ps5.cmake" -DPS5_NATIVE=ON -DEDEN_DEVICE_FRONTEND="$devices" \
     -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=OFF \

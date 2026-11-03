@@ -69,7 +69,9 @@ in the port's performance settings; the game's own values in the Library still w
   the title screen in the pool needs smaller host copies (fewer, smaller or shared textures),
   not a smaller guest. 16 MiB VMA blocks (`EDEN_PS5_VMA_BLOCK_MIB=16`, 19.5 FPS, out of
   memory at 168 s) and the transient image pools (`EDEN_PS5_TRANSIENT_POOLS=1`, 23.2 FPS, out
-  of memory at 155 s) changed neither the frame rate nor the time to exhaustion. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
+  of memory at 155 s) changed neither the frame rate nor the time to exhaustion.
+- Compiling the emulator for the console's Zen 2 (`EDEN_CPU_PRESET=zen2`, `-march=znver2`;
+  the default is generic x86-64) measured 19.8 and 22.6 FPS: no gain over the generic build. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
   recently used decoded ASTC images out of aggressive collection (fewer re-uploads, less
   headroom).
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock
