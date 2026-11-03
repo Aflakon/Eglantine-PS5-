@@ -96,6 +96,9 @@ def run_variant(label, perf, extra, original_config):
     entry = games.setdefault(MKW, {})
     if perf: entry['performance'] = perf
     else: entry.pop('performance', None)
+    # res=0.5x: the game's render resolution (settings_store.h kResolutionKeys).
+    if 'res' in extra: entry['resolution'] = extra['res']
+    else: entry.pop('resolution', None)
     put(CONFIG, json.dumps(config, indent=2).encode())
     (vdir / 'config.json').write_text(json.dumps(config, indent=2))
     with connect() as f:
