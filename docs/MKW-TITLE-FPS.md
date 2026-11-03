@@ -64,7 +64,10 @@ in the port's performance settings; the game's own values in the Library still w
   ("titles size their heap from the total memory") and the game maps nearly all of it; the
   sparse backing commits only the pages it writes, which is where the growth comes from.
   `EDEN_NX2_MEMORY_LAYOUT_GB=6|8|10` runs the title with a smaller layout (its graphics server
-  region stays) to see whether it sizes its heap down and the pool holds. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
+  region stays): with 8 and with 6 GiB the game faulted at a null pointer during its boot (it
+  never mapped memory), so its heap sizing needs the 12 GiB layout as the core says. Fitting
+  the title screen in the pool needs smaller host copies (fewer, smaller or shared textures),
+  not a smaller guest. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
   recently used decoded ASTC images out of aggressive collection (fewer re-uploads, less
   headroom).
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock
