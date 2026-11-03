@@ -127,7 +127,8 @@ def run_variant(label, perf, extra, original_config):
             raise AssertionError('process restarted during loading')
         if int((time.monotonic() - start) // 20) > getattr(run_variant, 'load_snaps', 0):
             run_variant.load_snaps = getattr(run_variant, 'load_snaps', 0) + 1
-            for name, path, n in [('stderr.log', '/data/eglantineps5/logs/stderr.log', 400000), ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000)]:
+            for name, path, n in [('stderr.log', '/data/eglantineps5/logs/stderr.log', 400000), ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000),
+                                  ('heap.log', '/data/eglantineps5/logs/heap.log', 400000)]:
                 try: (vdir / ('live-' + name)).write_text(tail(path, n))
                 except Exception as e: log('snapshot', name, repr(e))
         assert time.monotonic() - start < 420, 'title not reached in 420 s'
@@ -139,7 +140,8 @@ def run_variant(label, perf, extra, original_config):
     def snapshot():
         # Logs are truncated when the crash handler restarts the app: keep live tails.
         for name, path, n in [('stderr.log', '/data/eglantineps5/logs/stderr.log', 400000),
-                              ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000)]:
+                              ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000),
+                              ('heap.log', '/data/eglantineps5/logs/heap.log', 400000)]:
             try: (vdir / ('live-' + name)).write_text(tail(path, n))
             except Exception as e: log('snapshot', name, repr(e))
     while time.monotonic() - m_start < measure:

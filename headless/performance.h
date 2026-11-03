@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -545,6 +546,33 @@ inline void ReportVulkan() {
         std::printf("EDEN_VULKAN_COST api=%s calls=%llu ns=%llu\n", names[i],
                     vulkan_api[i].calls.load(std::memory_order_relaxed),
                     vulkan_api[i].nanoseconds.load(std::memory_order_relaxed));
+}
+// Guest run time per guest thread since the last report (mkw_guest_run, the JIT wrapper's timer;
+// not in the development profile build): the twelve busiest as tid=ms/runs. A thread near the
+// report interval's length is CPU-bound in guest code.
+inline void ReportGuestRun() {
+    static std::array<unsigned long long, 512> last_ns{}, last_calls{};
+    struct Row {
+        unsigned tid;
+        unsigned long long ns, calls;
+    };
+    std::array<Row, 512> rows{};
+    size_t count = 0;
+    for (unsigned tid = 0; tid < mkw_guest_run.size(); ++tid) {
+        const auto ns = mkw_guest_run[tid].nanoseconds.load(std::memory_order_relaxed);
+        const auto calls = mkw_guest_run[tid].calls.load(std::memory_order_relaxed);
+        const auto delta = ns - last_ns[tid];
+        const auto delta_calls = calls - last_calls[tid];
+        last_ns[tid] = ns;
+        last_calls[tid] = calls;
+        if (delta != 0) rows[count++] = {tid, delta, delta_calls};
+    }
+    std::sort(rows.begin(), rows.begin() + count,
+              [](const Row& a, const Row& b) { return a.ns > b.ns; });
+    std::printf("EDEN_GUEST_RUN");
+    for (size_t i = 0; i < count && i < 12; ++i)
+        std::printf(" %u=%llu/%llu", rows[i].tid, rows[i].ns / 1000000ULL, rows[i].calls);
+    std::printf("\n");
 }
 // Call only before guest startup and after worker shutdown, respectively.
 inline void Reset() {

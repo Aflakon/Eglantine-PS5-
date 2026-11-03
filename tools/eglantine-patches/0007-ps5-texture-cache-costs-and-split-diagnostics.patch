@@ -1,3 +1,33 @@
+diff --git a/src/core/hle/kernel/k_spin_lock.cpp b/src/core/hle/kernel/k_spin_lock.cpp
+index 107d6f1..9a51c64 100644
+--- a/src/core/hle/kernel/k_spin_lock.cpp
++++ b/src/core/hle/kernel/k_spin_lock.cpp
+@@ -1,6 +1,8 @@
+ // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <cstdlib>
++
+ #include "core/hle/kernel/k_spin_lock.h"
+ 
+ #if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+@@ -30,7 +32,15 @@ void KSpinLock::Lock() {
+                                         std::memory_order_relaxed)) {
+         return;
+     }
+-    for (int spin = 0; spin < SpinCount; ++spin) {
++    // The scheduler lock is contended by six guest cores handing work to each other ~14,000
++    // times a second at Mario Kart World's title; the atomic wait below polls the clock before
++    // it sleeps (2.7% of the guest cores' time on the console). EDEN_PS5_KSPIN=<pauses> (2048)
++    // spins longer first; 128 restores the old count.
++    static const int spin_count = [] {
++        const char* value = std::getenv("EDEN_PS5_KSPIN");
++        return value != nullptr ? std::atoi(value) : 2048;
++    }();
++    for (int spin = 0; spin < spin_count; ++spin) {
+         Pause();
+         if (m_state.load(std::memory_order_relaxed) == 0) {
+             expected = 0;
 diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
 index 4586f9a..5a2ca29 100644
 --- a/src/core/hle/service/nx2_gsv.h
@@ -53,10 +83,10 @@ index 4586f9a..5a2ca29 100644
      // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
      // present faster than that. Every slot is reported free here: hold each present until the
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
-index e600647..5508203 100644
+index e600647..c65a449 100644
 --- a/src/video_core/dma_pusher.cpp
 +++ b/src/video_core/dma_pusher.cpp
-@@ -911,13 +911,79 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
+@@ -911,13 +911,81 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
      if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || size == 0) {
          return;
      }
@@ -70,10 +100,12 @@ index e600647..5508203 100644
 +    // waits, as does a list that is dirty in the caches (its flush reads back through the back's
 +    // scheduler, which the back must not be using) or has a noted writer queued. Logged per
 +    // 2,000 lists. EDEN_NX2_LIST_DRAIN=1 restores the wait before every such list; =0 never
-+    // waits (experiment: the flush then races the back).
++    // waits (experiment: the flush then races the back). Skipping the waits measured no frame
++    // rate gain at that title (the guest's own frame loop sets its frame time), so the wait before
++    // every such list stays the default; EDEN_NX2_LIST_DRAIN=recent turns the gate on.
 +    static const int list_drain = [] {
 +        const char* value = std::getenv("EDEN_NX2_LIST_DRAIN");
-+        if (value == nullptr) return 2;
++        if (value == nullptr) return 1;
 +        if (value[0] == '0') return 0;
 +        return value[0] == '1' ? 1 : 2;
 +    }();
@@ -140,7 +172,7 @@ index e600647..5508203 100644
              }
          });
 diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
-index aa3e3d6..43de8bc 100644
+index aa3e3d6..ead7192 100644
 --- a/src/video_core/engines/puller.cpp
 +++ b/src/video_core/engines/puller.cpp
 @@ -6,6 +6,7 @@
@@ -159,7 +191,7 @@ index aa3e3d6..43de8bc 100644
 +// runs on the front, so one table without a lock). An acquire whose word is not met yet waits
 +// for the back only up to that release instead of everything queued: at Mario Kart World's
 +// title 63% of acquires waited for a queued release (28% of the front thread's wall time).
-+// EDEN_NX2_ACQUIRE_DRAIN_TO_RELEASE=0 waits for everything queued, as before.
++// It measured no frame rate gain at that title, so it is opt-in: EDEN_NX2_ACQUIRE_DRAIN_TO_RELEASE=1.
 +std::unordered_map<GPUVAddr, u64> g_release_positions;
 +
 +void NoteRelease(GPUVAddr address) {
@@ -171,7 +203,7 @@ index aa3e3d6..43de8bc 100644
 +void DrainBackToRelease(GPUVAddr address) {
 +    static const bool to_release = [] {
 +        const char* value = std::getenv("EDEN_NX2_ACQUIRE_DRAIN_TO_RELEASE");
-+        return value == nullptr || value[0] != '0';
++        return value != nullptr && value[0] == '1';
 +    }();
 +    auto& split = VideoCommon::GpuSplit::Get();
 +    if (!to_release || !split.Active()) {
