@@ -677,10 +677,13 @@ foreach(bits 32 64)
       # Guest cores 0-2 share a 640 MiB code budget. A64: 256/192/192, since a large
       # open-world game's workers filled 64 MiB on cores 1/2 and evacuated whole caches
       # while streaming. A32 keeps the qualified 512/64/64.
-      # Only the active architecture allocates these caches; core3/host stay 16 MiB.
+      # Only the active architecture allocates these caches; A32 core3/host stay 16 MiB.
+      # A64 cores 3+ get 128 MiB: Switch 2 games run workers on cores 3-5, and at 16 MiB
+      # Pokopia evacuated core 4's whole cache 50 times in two minutes, each one a frame stall.
+      # Code memory is committed in 16 MiB steps as a cache fills (memory_pages.cpp).
       if(PS5_NATIVE)
           if(bits EQUAL 64)
-              set(jit_cache_sizes "m_core_index == 0 ? 256_MiB : m_core_index < 3 ? 192_MiB : 16_MiB")
+              set(jit_cache_sizes "m_core_index == 0 ? 256_MiB : m_core_index < 3 ? 192_MiB : 128_MiB")
           else()
               set(jit_cache_sizes "m_core_index == 0 ? 512_MiB : m_core_index < 3 ? 64_MiB : 16_MiB")
           endif()
