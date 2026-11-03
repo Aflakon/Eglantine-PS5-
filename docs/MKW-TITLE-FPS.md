@@ -47,11 +47,13 @@ in the port's performance settings; the game's own values in the Library still w
 - The split's back thread is the limit: ~0.7-0.9 of a core at 22 FPS, of which engine method
   calls ~20% (2 million a second), draw setup ~35% (26,000-30,000 draws a second), texture
   uploads ~15% (re-uploads of collected ASTC images), fences ~3%, ring dispatch ~19%.
-- The front still waits for the back: before every unmet semaphore acquire and for command
-  lists on GPU-written pages. Checking an acquire against the guest's word first and waiting
-  only up to the last writing engine method are in patch 0006 behind
-  `EDEN_NX2_ACQUIRE_DRAIN_FIRST` / `EDEN_NX2_LIST_DRAIN_FULL`; see the run log for whether
-  they held up on the console.
+- The front still waits for the back for command lists on GPU-written pages. Checking a
+  semaphore acquire against the guest's own word before draining is on (23.1 FPS, within the
+  run-to-run noise of the full drain; `EDEN_NX2_ACQUIRE_DRAIN_FIRST=1` restores the drain).
+  Waiting only up to the last compute, copy or upload method crashed the game while loading on
+  two candidates (a list read before its writer ran, then a clear with a garbage render
+  target), so it is off unless `EDEN_NX2_LIST_DRAIN_TO_WRITER=1`: something the front does not
+  count as a writer fills those lists.
 - Memory: the guest's mapped memory grows through the title screen (4.3 -> 4.8 GB in two
   minutes) while the texture cache holds ~2-4 GB of host copies and the heap ~1.9 GB in an
   11.1 GB pool; low-accuracy runs end with `VK_ERROR_OUT_OF_DEVICE_MEMORY` after 1.5-3

@@ -352,20 +352,23 @@ index 2bcc6c1..aa3e3d6 100644
          if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
              return;
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
-index fd7e308..5c59402 100644
+index fd7e308..5b5f5a3 100644
 --- a/src/video_core/gpu_split.cpp
 +++ b/src/video_core/gpu_split.cpp
-@@ -216,6 +216,36 @@ void GpuSplit::Drain() {
+@@ -216,6 +216,39 @@ void GpuSplit::Drain() {
      }
  }
  
 +void GpuSplit::DrainToLastWriter() {
-+    // EDEN_NX2_LIST_DRAIN_FULL=1: wait for everything sent, as before (every draw too).
-+    static const bool full = [] {
-+        const char* value = std::getenv("EDEN_NX2_LIST_DRAIN_FULL");
++    // Waiting only up to the last compute, copy or upload method crashed Mario Kart World
++    // while loading on the console (a list read before its writer ran, then a clear with a
++    // garbage render target): something the front does not count as a writer fills them. Off
++    // unless EDEN_NX2_LIST_DRAIN_TO_WRITER=1; the default waits for everything sent.
++    static const bool to_writer = [] {
++        const char* value = std::getenv("EDEN_NX2_LIST_DRAIN_TO_WRITER");
 +        return value != nullptr && value[0] == '1';
 +    }();
-+    if (full) {
++    if (!to_writer) {
 +        Drain();
 +        return;
 +    }
