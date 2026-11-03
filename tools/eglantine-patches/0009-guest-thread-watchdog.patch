@@ -1,0 +1,59 @@
+diff --git a/src/core/core.cpp b/src/core/core.cpp
+index 3842ee25a8..b791bf28d5 100644
+--- a/src/core/core.cpp
++++ b/src/core/core.cpp
+@@ -4,7 +4,10 @@
+ #include <array>
+ #include <cstdlib>
+ #include <atomic>
++#include <chrono>
+ #include <memory>
++#include <stop_token>
++#include <thread>
+ #include <utility>
+ 
+ #include "game_settings.h"
+@@ -257,6 +260,35 @@ struct System::Impl {
+         kernel.SuspendEmulation(false);
+         core_timing.SyncPause(false);
+         is_paused.store(false, std::memory_order_relaxed);
++        if (!diag_watchdog.joinable()) {
++            // Every 15 s (40 times) list each guest thread: state 1 = waiting, 2 = runnable (no wait
++            // reason = running or spinning). pc/lr are the context saved when the thread last stopped,
++            // so they only mean something for waiting threads.
++            diag_watchdog = std::jthread([this](std::stop_token stop) {
++                for (int tick = 1; tick <= 40 && !stop.stop_requested(); ++tick) {
++                    for (int i = 0; i < 150 && !stop.stop_requested(); ++i) {
++                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
++                    }
++                    if (stop.stop_requested()) {
++                        break;
++                    }
++                    auto processes = kernel.GetProcessList();
++                    LOG_WARNING(Core, "guest threads t={}s processes={}", tick * 15, processes.size());
++                    for (auto& process : processes) {
++                        Kernel::KScopedLightLock ll{process->GetListLock()};
++                        for (auto& thread : process->GetThreadList()) {
++                            const auto& ctx = thread.GetContext();
++                            LOG_WARNING(Core,
++                                        " {} tid={} core={} state={} wait={} pc={:#x} lr={:#x} sp={:#x}",
++                                        process->GetName(), thread.GetThreadId(), thread.GetActiveCore(),
++                                        static_cast<unsigned>(thread.GetState()) & 0xF,
++                                        static_cast<unsigned>(thread.GetWaitReasonForDebugging()), ctx.pc,
++                                        ctx.lr, ctx.sp);
++                        }
++                    }
++                }
++            });
++        }
+     }
+ 
+     void Pause() {
+@@ -579,6 +611,7 @@ struct System::Impl {
+     mutable std::mutex suspend_guard;
+     std::mutex general_channel_mutex;
+     std::atomic_bool is_paused{};
++    std::jthread diag_watchdog;
+     std::atomic_bool is_shutting_down{};
+     std::atomic_bool is_powered_on{};
+     bool is_multicore : 1 = false;

@@ -1,0 +1,12 @@
+diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
+index 37c797fa3f..87d4c2a3cc 100644
+--- a/src/core/hle/service/nx2_gsv.h
++++ b/src/core/hle/service/nx2_gsv.h
+@@ -1637,6 +1637,7 @@ public:
+             {13, &INx2Vi2Session::StubReplyZeroed, "Unknown13"},
+             {51, &INx2Vi2Session::StubReplyZeroed, "Unknown51"},
+             {101, &INx2Vi2Session::StubReplyZeroed, "Unknown101"},
++            {201, &INx2Vi2Session::StubReplyZeroed, "Unknown201"},
+             {102, &INx2Vi2Session::StubReplyZeroed, "Unknown102"},
+             {107, &INx2Vi2Session::StubReplyZeroed, "Unknown107"},
+             {108, &INx2Vi2Session::StubReplyZeroed, "Unknown108"},

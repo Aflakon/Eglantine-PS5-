@@ -715,6 +715,11 @@ int main(int argc, char** argv) {
 #endif
             Common::Log::SetGlobalFilter(filter);
         }
+#ifdef PS5_NATIVE
+        // A hang kills the process with the log file half written; flush every line so eden_log.txt
+        // keeps the last thing the guest did.
+        Settings::values.log_flush_line.SetValue(true);
+#endif
         Common::Log::Start();
         SCOPE_EXIT { Common::Log::Stop(); };
         #ifdef EDEN_PS5_OPENGL
