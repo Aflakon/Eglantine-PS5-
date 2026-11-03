@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -41,6 +42,8 @@
 #include "core/file_sys/common_funcs.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
+#include "core/file_sys/nup_container.h"
+#include "core/file_sys/nup_writer.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
@@ -57,6 +60,28 @@ constexpr std::array<const char*, 18> language_names{
     "Portuguese", "Russian", "Korean", "TraditionalChinese", "SimplifiedChinese",
     "BrazilianPortuguese", "Polish", "Thai",
 };
+
+// A NUP package (a base game with its updates and DLC in one file; Loader::AppLoader_NUP reads it):
+// the game's name, icon and title ID come from the package its program is in, the base's, or the
+// newest update's when there is no base. Its languages are the ones the loader declares.
+constexpr uint32_t kNupLanguages = 0x3FFFF;
+
+const FileSys::NupContainer::PackageInfo* NupProgramPackage(const FileSys::NupContainer& nup) {
+    if (nup.GetStatus() != Loader::ResultStatus::Success) return nullptr;
+    auto index = nup.FindBasePackage();
+    if (!index) index = nup.FindBestUpdatePackage();
+    return index ? &nup.GetPackages()[*index] : nullptr;
+}
+
+std::string NupTitle(const FileSys::NupContainer::PackageInfo& package) {
+    std::vector<std::string> names{package.title_name};
+    for (const auto& [language, name] : package.localized_titles) names.push_back(name);
+    for (const std::string& name : names)
+        if (!name.empty() && Eden::UsableName(name.c_str())) return Eden::PlainName(name.c_str());
+    return {};
+}
+
+bool WriteTgaBytes(const unsigned char* encoded, std::size_t size, const char* output, int largest);
 
 FileSys::VirtualDir OpenControlRomFs(const FileSys::VirtualFile& file, bool xci) {
     std::shared_ptr<FileSys::NCA> control;
@@ -210,6 +235,11 @@ uint64_t eden_game_title_id(const char* rom_path) {
         FileSys::NSP package(file);
         return package.GetStatus() == Loader::ResultStatus::Success ? package.GetProgramTitleID() : 0;
     }
+    if (path.ends_with(".nup")) {
+        const FileSys::NupContainer nup(file);
+        const auto* package = NupProgramPackage(nup);
+        return package ? package->title_id : 0;
+    }
     return 0;
 }
 
@@ -225,6 +255,20 @@ int eden_extract_game_metadata(const char* rom_path, const char* keys_dir,
     std::string path = rom_path;
     std::transform(path.begin(), path.end(), path.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (path.ends_with(".nup")) {
+        const FileSys::NupContainer nup(file);
+        const auto* package = NupProgramPackage(nup);
+        if (!package) return 0;
+        GameLanguages()[rom_path] = kNupLanguages;
+        int nup_result = 0;
+        if (const std::string name = NupTitle(*package); !name.empty()) {
+            std::snprintf(title, title_capacity, "%s", name.c_str());
+            nup_result |= EDEN_METADATA_TITLE;
+        }
+        if (!package->icon.empty() && WriteTgaBytes(package->icon.data(), package->icon.size(), cover_tga_path, 4096))
+            nup_result |= EDEN_METADATA_COVER;
+        return nup_result;
+    }
     const bool xci = path.size() >= 4 && path.substr(path.size() - 4) == ".xci";
     const auto romfs = OpenControlRomFs(file, xci);
     if (!romfs) return 0;
@@ -252,6 +296,7 @@ uint32_t eden_game_supported_languages(const char* rom_path, const char* keys_di
         std::string path = rom_path;
         std::transform(path.begin(), path.end(), path.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (path.ends_with(".nup")) return GameLanguages()[rom_path] = kNupLanguages;
         const auto romfs = OpenControlRomFs(file, path.ends_with(".xci"));
         if (!romfs) return 0;
         return GameLanguages()[rom_path] = ReadLanguages(romfs);
@@ -537,4 +582,55 @@ const char* eden_startup_error() {
         }
     }();
     return error.c_str();
+}
+
+int eden_nup_source(const char* rom_path, char* dump_root, size_t capacity) {
+    if (!rom_path || !dump_root || capacity == 0) return 0;
+    dump_root[0] = '\0';
+    try {
+        const auto root = FileSys::Nup::DumpRootFromMain(rom_path);
+        if (!root) return 0;
+        std::snprintf(dump_root, capacity, "%s", root->string().c_str());
+        return 1;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "[EglantinePS5] nup: %s\n", error.what());
+        return 0;
+    }
+}
+
+int eden_nup_archive_path(const char* dump_root, char* archive, size_t capacity) {
+    if (!dump_root || !archive || capacity == 0) return 0;
+    archive[0] = '\0';
+    const auto path = FileSys::Nup::DefaultArchivePath(dump_root).string();
+    if (path.size() >= capacity) return 0;
+    std::snprintf(archive, capacity, "%s", path.c_str());
+    return 1;
+}
+
+int eden_nup_pack(const char* dump_root, const char* archive, eden_nup_progress progress, void* user,
+                  const void* cancel, char* error, size_t error_capacity) {
+    if (error && error_capacity) error[0] = '\0';
+    if (!dump_root || !archive) return EDEN_NUP_INVALID;
+    try {
+        FileSys::Nup::PackOptions options;
+        // The console's memory is shared with the graphics: pack in smaller pieces than a PC does.
+        options.chunk_bytes = 64ULL * 1024 * 1024;
+        std::string message;
+        const auto result = FileSys::Nup::PackDump(
+            dump_root, archive, options,
+            [&](const FileSys::Nup::PackProgress& step) {
+                if (progress) progress(user, step.bytes_done, step.bytes_total);
+            },
+            static_cast<const std::atomic_bool*>(cancel), &message);
+        if (error && error_capacity) std::snprintf(error, error_capacity, "%s", message.c_str());
+        switch (result) {
+        case FileSys::Nup::PackResult::Success: return EDEN_NUP_DONE;
+        case FileSys::Nup::PackResult::Cancelled: return EDEN_NUP_CANCELLED;
+        case FileSys::Nup::PackResult::InvalidSource: return EDEN_NUP_INVALID;
+        default: return EDEN_NUP_FAILED;
+        }
+    } catch (const std::exception& failure) {
+        if (error && error_capacity) std::snprintf(error, error_capacity, "%s", failure.what());
+        return EDEN_NUP_FAILED;
+    }
 }

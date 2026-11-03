@@ -2298,6 +2298,24 @@ ${paths_source}")
     write_derived("${PORT_BUILD_DIR}/fs.cpp" "${fs_source}")
     list(REMOVE_ITEM common_sources fs/fs.cpp)
     list(APPEND common_sources "${PORT_BUILD_DIR}/fs.cpp")
+    # The NUP packer lists folders through ListDirectory (patch 0009): on the console that is the
+    # native directory reader, as for fs.cpp above.
+    if("file_sys/nup_writer.cpp" IN_LIST core_sources)
+        file(READ "${PROJECT_SOURCE_DIR}/src/core/file_sys/nup_writer.cpp" nup_writer_source)
+        string(FIND "${nup_writer_source}" "    // NUP_LIST_DIRECTORY_BEGIN\n" nup_list_begin)
+        string(FIND "${nup_writer_source}" "    // NUP_LIST_DIRECTORY_END\n" nup_list_end)
+        if(nup_list_begin EQUAL -1 OR nup_list_end EQUAL -1)
+            message(FATAL_ERROR "nup_writer.cpp: the ListDirectory markers moved; the packer would list folders with std::filesystem, which the console cannot do")
+        endif()
+        string(LENGTH "    // NUP_LIST_DIRECTORY_END\n" nup_list_end_length)
+        math(EXPR nup_list_after "${nup_list_end} + ${nup_list_end_length}")
+        string(SUBSTRING "${nup_writer_source}" 0 ${nup_list_begin} nup_writer_head)
+        string(SUBSTRING "${nup_writer_source}" ${nup_list_after} -1 nup_writer_tail)
+        set(nup_writer_source "#include \"${EDEN_PORT_DIR}/native_directory.h\"\n${nup_writer_head}    entries = Eden::ReadNativeDirectory(path, ec);\n${nup_writer_tail}")
+        write_derived("${PORT_BUILD_DIR}/nup_writer.cpp" "${nup_writer_source}")
+        list(REMOVE_ITEM core_sources file_sys/nup_writer.cpp)
+        list(APPEND core_sources "${PORT_BUILD_DIR}/nup_writer.cpp")
+    endif()
 # The GPU's address space table (Common::MultiLevelPageTable, one per address space a game asks
 # for) reserves its whole range with an anonymous mmap and relies on the system to back a page
 # only when it is first written. On the PS5 an anonymous mapping comes out of the flexible pool

@@ -43,6 +43,7 @@ enum GameRow : int
     row_language,
     row_mods,
     row_save,   // in builds that move saves
+    row_nup,    // a folder game: packed into one NUP file
     row_delete, // a game a download source has: deleted from the console
 };
 constexpr float kDialogRowsTop = 334.0f;
@@ -401,6 +402,8 @@ void Launcher::press_library(Key key)
                              services_.save_import_source(game->title_id) : SaveSource::none;
         import_armed_ = false;
         delete_armed_ = false;
+        nup_armed_ = false;
+        nup_possible_ = services_.nup_available(games_[static_cast<std::size_t>(library_.selected)]);
         read_mods(games_[static_cast<std::size_t>(library_.selected)]);
         open_modal(Modal::game);
         game_rows_.visible = kDialogRowsShown;
@@ -680,13 +683,40 @@ void Launcher::draw_library(Canvas &c)
     draw_footer(c, kHints, 6);
 }
 
+// The packing of a folder game ended (or stopped): say so, and read the Library again, which now
+// has the NUP file next to the folder.
+void Launcher::poll_nup()
+{
+    const NupStatus status = services_.nup_status();
+    if (status.phase == nup_seen_)
+        return;
+    if (nup_seen_ == NupPhase::running)
+    {
+        if (status.phase == NupPhase::done)
+        {
+            rescan_ = true;
+            say(status.message);
+            cue(Cue::saved);
+        }
+        else
+        {
+            say(status.message, status.phase == NupPhase::failed);
+            cue(status.phase == NupPhase::failed ? Cue::error : Cue::notify);
+        }
+    }
+    nup_seen_ = status.phase;
+}
+
 // ---------------------------------------------------------------- game settings dialog
 
 int Launcher::game_row(int row) const
 {
-    if (row < row_save)
-        return row;
-    return services_.save_transfer_available() ? row : row + 1;
+    int kind = row;
+    if (kind >= row_save && !services_.save_transfer_available())
+        ++kind;
+    if (kind >= row_nup && !nup_possible_)
+        ++kind;
+    return kind;
 }
 
 void Launcher::press_game(Key key)
@@ -707,6 +737,7 @@ void Launcher::press_game(Key key)
             message_.clear();
             import_armed_ = false;
             delete_armed_ = false;
+            nup_armed_ = false;
             cue(Cue::focus);
         }
         return;
@@ -741,6 +772,50 @@ void Launcher::press_game(Key key)
         modal_ = modal_shown_ = Modal::mods;
         message_.clear();
         cue(Cue::open);
+        return;
+    }
+    if (kind == row_nup)
+    {
+        // A folder game packed into one NUP file beside it: Cross asks first, then packs in the
+        // background (the row shows how far it is; Cross again stops it).
+        if (key != Key::cross)
+            return;
+        const NupStatus status = services_.nup_status();
+        if (status.phase == NupPhase::running)
+        {
+            if (status.file == game.file)
+            {
+                services_.cancel_nup();
+                say(tr("Stopping the packing."));
+                cue(Cue::notify);
+            }
+            else
+            {
+                say(tr("Another game is being packed."), true);
+                cue(Cue::error);
+            }
+            return;
+        }
+        if (!nup_armed_)
+        {
+            nup_armed_ = true;
+            say(tr("Press again to pack this game, with its updates and DLC, into one NUP file next to its "
+                   "folder. It needs free space like the game's size."),
+                true);
+            cue(Cue::notify);
+            return;
+        }
+        nup_armed_ = false;
+        std::string result;
+        if (!services_.start_nup(game, &result))
+        {
+            say(result.empty() ? std::string{tr("Could not start packing.")} : result, true);
+            cue(Cue::error);
+            return;
+        }
+        say(tr("Packing started. It goes on in the background, and the NUP file shows in the Library when it is "
+               "ready. Starting a game stops it."));
+        cue(Cue::saved);
         return;
     }
     if (kind == row_delete)
@@ -841,6 +916,20 @@ void Launcher::draw_game(Canvas &c, float open)
         return count == 0 ? std::string{tr("Follows Settings")} :
                             fill(tr("{0} changed"), {std::to_string(count)});
     };
+    // The NUP row: how far the game's packing is, or what became of the last one.
+    std::string nup_value = tr("Not packed");
+    if (const NupStatus nup = services_.nup_status(); game != nullptr && nup.file == game->file)
+    {
+        if (nup.phase == NupPhase::running)
+            nup_value = fill(tr("Packing {0}%"),
+                             {std::to_string(nup.total ? static_cast<int>(nup.done * 100 / nup.total) : 0)});
+        else if (nup.phase == NupPhase::done)
+            nup_value = tr("Packed");
+        else if (nup.phase == NupPhase::failed)
+            nup_value = tr("Failed");
+        else if (nup.phase == NupPhase::cancelled)
+            nup_value = tr("Stopped");
+    }
     const std::string values[] = {
         game_docked_ ? tr("Docked") : tr("Handheld"),
         changed(row_video - row_video),
@@ -858,12 +947,13 @@ void Launcher::draw_game(Canvas &c, float open)
                   std::to_string(mods_.size())}),
         import_source_ == SaveSource::ryujinx ? tr("Ryujinx save found") :
         import_source_ == SaveSource::folder ? tr("Save folder found") : tr("Nothing to import"),
+        nup_value,
         game != nullptr ? game->size : std::string{},
     };
     static constexpr const char *kLabels[] = {TR("Console mode"), TR("Video"),    TR("Performance"),
                                               TR("Audio"),        TR("Controls"), TR("System"),
                                               TR("Language"),     TR("Mods"),     TR("Save data"),
-                                              TR("Delete from console")};
+                                              TR("Convert to NUP"), TR("Delete from console")};
     // Five rows show; the list scrolls to the others.
     list.push_clip({kDialogWindow.x - 24.0f, kDialogWindow.y - 6.0f, kDialogWindow.w + 48.0f,
                     kDialogWindow.h + 12.0f});
@@ -889,6 +979,7 @@ void Launcher::draw_game(Canvas &c, float open)
         // Save data say what is there; the console mode is a choice; deleting says the game's size.
         const bool there = kind == row_mods ? !mods_.empty() && (game == nullptr || game->mods_enabled) :
                            kind == row_save ? import_source_ != SaveSource::none :
+                           kind == row_nup ? services_.nup_status().phase == NupPhase::running :
                            kind == row_delete ? false :
                                               game_overrides(kind - row_video) > 0;
         const float taken =
@@ -911,6 +1002,14 @@ void Launcher::draw_game(Canvas &c, float open)
         notice_block(c, message_, 592.0f, kDialogHints - 6.0f, theme::kSmall, 26.0f,
                      message_warning_ ? theme::kWarning : theme::kLimePale, 736.0f, 2,
                      message_warning_);
+    }
+    else if (game_row(option_) == row_nup)
+    {
+        static constexpr Hint kPack[] = {{Pad::cross, TR("Pack")}, {Pad::circle, TR("Back")}};
+        static constexpr Hint kStop[] = {{Pad::cross, TR("Stop")}, {Pad::circle, TR("Back")}};
+        const NupStatus nup = services_.nup_status();
+        draw_hints(c, nup.phase == NupPhase::running && game != nullptr && nup.file == game->file ? kStop : kPack, 2,
+                   592.0f, kDialogHints, theme::kCopy, 736.0f);
     }
     else if (game_row(option_) == row_delete)
     {

@@ -67,6 +67,24 @@ int eden_save_import(uint64_t title_id, char* path, size_t capacity);
 // game files folder; path receives that folder.
 int eden_save_export(uint64_t title_id, char* path, size_t capacity);
 
+// Packing a folder game (exefs/ and romfs/, with its updates and DLC) into one NUP file, as the
+// core's packer does (core/file_sys/nup_writer.h). The folder is given by the game's exefs/main.
+// Nonzero, with the folder in dump_root, when exefs/main belongs to a folder that can be packed.
+int eden_nup_source(const char* rom_path, char* dump_root, size_t capacity);
+// Where the package goes: next to the folder, with ".nup" added to its name.
+int eden_nup_archive_path(const char* dump_root, char* archive, size_t capacity);
+typedef void (*eden_nup_progress)(void* user, uint64_t bytes_done, uint64_t bytes_total);
+enum {
+    EDEN_NUP_DONE = 0,
+    EDEN_NUP_CANCELLED = 1,   // cancel was set; no package is left
+    EDEN_NUP_INVALID = 2,     // not a folder game, or the package already exists
+    EDEN_NUP_FAILED = 3,      // reading or writing failed (error says why, when it can)
+};
+// Writes the package (as <archive>.part, then moved into place). cancel is a std::atomic_bool the
+// caller sets to stop it; progress is called from the packing thread. Takes minutes for a big game.
+int eden_nup_pack(const char* dump_root, const char* archive, eden_nup_progress progress, void* user,
+                  const void* cancel, char* error, size_t error_capacity);
+
 #ifdef __cplusplus
 }
 #endif

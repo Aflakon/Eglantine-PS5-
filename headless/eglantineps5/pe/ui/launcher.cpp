@@ -276,6 +276,7 @@ void Launcher::update(float dt)
     finish_scan(false);
     poll_sources(dt);
     poll_save_sync(dt);
+    poll_nup();
     poll_pairing(dt);
     refresh_sync_setup(dt);
     update_multiplayer();

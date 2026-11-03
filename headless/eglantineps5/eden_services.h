@@ -86,6 +86,11 @@ public:
     std::vector<pe::ui::Download> downloads() override;
     bool delete_game(const pe::ui::Game& game, std::string* message) override;
 
+    bool nup_available(const pe::ui::Game& game) override;
+    bool start_nup(const pe::ui::Game& game, std::string* message) override;
+    pe::ui::NupStatus nup_status() override;
+    void cancel_nup() override;
+
     bool save_sync_wanted(const std::string& file) override;
     void start_save_sync(const std::string& file, bool before) override;
     pe::ui::SaveSync save_sync() override;
@@ -141,6 +146,10 @@ private:
         std::string file;    // the game's file in roms/
     };
     void StartSync(std::vector<SyncJob> jobs, bool before);
+    std::thread nup_thread_;
+    std::mutex nup_lock_;
+    pe::ui::NupStatus nup_;
+    std::atomic<bool> nup_cancel_{false};
     std::thread sync_thread_;
     std::mutex sync_lock_;
     std::condition_variable sync_changed_;

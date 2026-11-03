@@ -792,6 +792,9 @@ EdenServices::~EdenServices() {
     if (sync_thread_.joinable()) sync_thread_.join();
     pair_stop_ = true;
     if (pair_thread_.joinable()) pair_thread_.join();
+    // A game starting ends the packing (the menu is gone, and the memory is the game's).
+    nup_cancel_ = true;
+    if (nup_thread_.joinable()) nup_thread_.join();
 }
 
 pe::ui::Home EdenServices::home() {
@@ -1076,7 +1079,7 @@ std::vector<pe::ui::Game> EdenServices::games() {
         std::string format = file.substr(dot + 1);
         std::transform(format.begin(), format.end(), format.begin(),
                        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-        if (format != "NSP" && format != "XCI" && format != "DIR") continue;
+        if (format != "NSP" && format != "XCI" && format != "NUP" && format != "DIR") continue;
         const std::string path = RomPath(file);
         struct stat info {};
         if (stat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) continue;
@@ -1445,7 +1448,7 @@ pe::ui::FolderInfo EdenServices::folder_info(const std::string& directory) {
     pe::ui::FolderInfo info;
     info.keys = Eden::FileExists(JoinPath(directory, "keys/prod.keys"));
     info.firmware = CountFiles(JoinPath(directory, "firmware"), {".nca"});
-    info.games = CountFiles(JoinPath(directory, "roms"), {".nsp", ".xci"});
+    info.games = CountFiles(JoinPath(directory, "roms"), {".nsp", ".xci", ".nup"});
     return info;
 }
 
@@ -1675,6 +1678,87 @@ std::vector<pe::ui::Download> EdenServices::downloads() {
     }
     return list;
 }
+
+// ---- NUP packages: a folder game packed into one file (core/file_sys/nup_writer.h) ----
+
+bool EdenServices::nup_available(const pe::ui::Game& game) {
+    // Only a folder on this console: not one on a share, not one a download source still has.
+    if (!IsFolderGame(game.file) || game.remote) return false;
+    const std::string main = RomPath(game.file);
+    if (main.rfind("/nfs/", 0) == 0) return false;
+    char root[1024]{};
+    char archive[1100]{};
+    {
+        const std::lock_guard lock(bridge_);
+        if (!eden_nup_source(main.c_str(), root, sizeof(root))) return false;
+        if (!eden_nup_archive_path(root, archive, sizeof(archive))) return false;
+    }
+    return !Eden::FileExists(archive);
+}
+
+bool EdenServices::start_nup(const pe::ui::Game& game, std::string* message) {
+    const auto refuse = [&](const char* reason) {
+        if (message) *message = reason;
+        return false;
+    };
+    if (!nup_available(game)) return refuse(tr("This game cannot be packed (it is not a folder, or its NUP file exists)."));
+    {
+        const std::lock_guard lock(nup_lock_);
+        if (nup_.phase == pe::ui::NupPhase::running) return refuse(tr("Another game is being packed."));
+    }
+    // The one before has ended: its thread only has to be collected.
+    if (nup_thread_.joinable()) nup_thread_.join();
+    char root[1024]{};
+    char archive[1100]{};
+    {
+        const std::lock_guard lock(bridge_);
+        if (!eden_nup_source(RomPath(game.file).c_str(), root, sizeof(root)) ||
+            !eden_nup_archive_path(root, archive, sizeof(archive)))
+            return refuse(tr("This game cannot be packed."));
+    }
+    nup_cancel_ = false;
+    {
+        const std::lock_guard lock(nup_lock_);
+        nup_ = {};
+        nup_.phase = pe::ui::NupPhase::running;
+        nup_.file = game.file;
+    }
+    nup_thread_ = std::thread([this, root = std::string{root}, archive = std::string{archive}] {
+        const auto progress = [](void* user, std::uint64_t done, std::uint64_t total) {
+            auto* self = static_cast<EdenServices*>(user);
+            const std::lock_guard lock(self->nup_lock_);
+            self->nup_.done = done;
+            self->nup_.total = total;
+        };
+        char error[512]{};
+        // Not under bridge_: the packing takes minutes and the menu keeps reading games meanwhile.
+        const int result = eden_nup_pack(root.c_str(), archive.c_str(), progress, this, &nup_cancel_, error, sizeof(error));
+        const std::lock_guard lock(nup_lock_);
+        switch (result) {
+        case EDEN_NUP_DONE:
+            nup_.phase = pe::ui::NupPhase::done;
+            nup_.message = tr("The NUP file is ready, next to the game's folder.");
+            break;
+        case EDEN_NUP_CANCELLED:
+            nup_.phase = pe::ui::NupPhase::cancelled;
+            nup_.message = tr("Packing stopped.");
+            break;
+        default:
+            nup_.phase = pe::ui::NupPhase::failed;
+            nup_.message = error[0] ? std::string{tr("Packing failed: ")} + error : std::string{tr("Packing failed.")};
+            break;
+        }
+        Eden::Report("nup", (archive + ": " + nup_.message).c_str());
+    });
+    return true;
+}
+
+pe::ui::NupStatus EdenServices::nup_status() {
+    const std::lock_guard lock(nup_lock_);
+    return nup_;
+}
+
+void EdenServices::cancel_nup() { nup_cancel_ = true; }
 
 bool EdenServices::delete_game(const pe::ui::Game& game, std::string* message) {
     if (!Eden::FilesystemAccess() || game.sources.empty() || game.remote || !Eden::ValidRomFilename(game.file))

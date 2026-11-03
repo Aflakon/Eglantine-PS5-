@@ -232,6 +232,7 @@ class Launcher
     // Looks at the queue and the sources a few times a second: the Library reads its list again
     // when their games changed, and the game being played starts once it is there.
     void poll_sources(float dt);
+    void poll_nup();
     // The queue's entry of a game (Game::key); nullptr when it has none.
     const Download *download_of(const std::string &key) const;
     // What a game on its sources shows in the Library: its source (or how many), queued, its
@@ -413,6 +414,9 @@ class Launcher
     SaveSource import_source_ = SaveSource::none; // what Save data could import for the game
     bool import_armed_ = false;                   // Cross was pressed once: the next one imports
     bool delete_armed_ = false;                   // the same before a game is deleted
+    bool nup_possible_ = false;                   // the game's folder can be packed into a NUP file
+    bool nup_armed_ = false;                      // Cross was pressed once: the next one starts packing
+    NupPhase nup_seen_ = NupPhase::idle;          // the packing phase last reported to the player
     ListView game_rows_;                          // the game dialog's rows (more than it shows)
     std::vector<Mod> mods_;                       // the game's mods, read when its dialog opens
     // The Mods list's rows: each mod, then its cheats when it lists several.

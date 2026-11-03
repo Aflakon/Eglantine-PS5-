@@ -1,17 +1,18 @@
 diff --git a/src/core/loader/deconstructed_rom_directory.cpp b/src/core/loader/deconstructed_rom_directory.cpp
-index cda1645548..aa1bea9e75 100644
+index 4b1168a59..a5cdb656e 100644
 --- a/src/core/loader/deconstructed_rom_directory.cpp
 +++ b/src/core/loader/deconstructed_rom_directory.cpp
-@@ -6,6 +6,8 @@
+@@ -6,7 +6,9 @@
  
  #include <algorithm>
  #include <cctype>
 +#include <charconv>
+ #include <chrono>
 +#include "core/file_sys/vfs/vfs_layered.h"
  #include <cstring>
- #include <string_view>
- #include "common/logging.h"
-@@ -77,12 +79,71 @@ struct PatchCollection {
+ #include <map>
+ #include <memory>
+@@ -81,12 +83,71 @@ struct PatchCollection {
  
  namespace {
  
@@ -83,7 +84,7 @@ index cda1645548..aa1bea9e75 100644
      for (const auto& f : exefs_dir->GetFiles()) {
          if (f->GetExtension() == "romfs") {
              return f;
-@@ -169,8 +230,9 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
+@@ -202,8 +263,9 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
      : AppLoader(std::move(file_))
      , override_update(override_update_)
  {
@@ -95,16 +96,18 @@ index cda1645548..aa1bea9e75 100644
  
      // Title ID
      const auto npdm = file_dir->GetFile("main.npdm");
-@@ -233,7 +295,7 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
+@@ -266,7 +328,9 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
          name = control->GetApplicationName();
      }
  
--    romfs = FindLooseRomFS(file_dir);
-+    romfs = FindLooseRomFS(physical_dir);
+-    romfs_exefs_dir = file_dir;
++    // The RomFS is built when first read (EnsureRomFS); from the folder on disk, so that the layers of an
++    // extracted dump (base/ and updates/<version>/) are all seen.
++    romfs_exefs_dir = physical_dir;
      if (const auto title_dir = file_dir->GetParentDirectory()) {
          romfs_version = RomFSProductVersion(title_dir->GetSubdirectory("romfs"));
      }
-@@ -270,7 +332,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
+@@ -313,7 +377,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
              return {ResultStatus::ErrorNullFile, {}};
          }
  

@@ -34,6 +34,24 @@ enum class Key : std::uint8_t
     right,
 };
 
+// Where packing a folder game into a NUP file is.
+enum class NupPhase : std::uint8_t
+{
+    idle,
+    running,
+    done,
+    cancelled,
+    failed,
+};
+struct NupStatus
+{
+    NupPhase phase = NupPhase::idle;
+    std::string file;           // the library key of the game being (or last) packed
+    std::uint64_t done = 0;     // bytes written so far, of total (0 while it is still counting)
+    std::uint64_t total = 0;
+    std::string message;        // what happened, once it ended
+};
+
 // A newer release of the app, listed on prosperostore.net.
 struct UpdateOffer
 {
@@ -576,6 +594,25 @@ class Services
     {
         return false;
     }
+
+    // ---- NUP packages: a folder game (exefs/, romfs/, updates, DLC) packed into one file ----
+    // Whether the game is a folder that can be packed (and has no package next to it yet).
+    virtual bool nup_available(const Game &)
+    {
+        return false;
+    }
+    // Starts packing it in the background, into <folder>.nup beside the folder. False, with the
+    // reason in the string, when it cannot start (another one is running, no room to write...).
+    virtual bool start_nup(const Game &, std::string *)
+    {
+        return false;
+    }
+    virtual NupStatus nup_status()
+    {
+        return {};
+    }
+    // Stops the packing in progress; its half-written file is removed.
+    virtual void cancel_nup() {}
 
     // ---- save sync: a game's save data in step with the profile's save store ----
     // Whether the profile playing syncs the game's save data before it starts and after it ended.
