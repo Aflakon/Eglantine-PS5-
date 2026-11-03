@@ -5,6 +5,7 @@
 #include "../src/fastmem.h"
 #include "common/cpu_features.h"
 #include "common/sparse_large_vector.h"
+#include <string_view>
 #include <algorithm>
 #include <string>
 #include <set>
@@ -211,20 +212,59 @@ void CheckWorkerTopology() {
     std::printf("EDEN_WORKER_TOPOLOGY ready=%d distinct_cores=%u cpus=%u,%u,%u,%u,%u\n",
         worker_topology_ready, count, worker_cpus[0], worker_cpus[1], worker_cpus[2], worker_cpus[3], worker_cpus[4]);
 }
+// EDEN_PS5_PLACE="CPUCore_4=1/GPUBack=10/VulkanWorker=12,13" (layout experiments; ; or / between entries): the CPUs a
+// thread of that name runs on, replacing its pin or the secondary mask. Read on each placement:
+// the game's env.txt arrives after the launcher's own threads were placed.
+unsigned long long PlacementOverride(const char* name) {
+    const char* spec = std::getenv("EDEN_PS5_PLACE");
+    if (spec == nullptr || name == nullptr) return 0;
+    const std::string_view wanted{name};
+    std::string_view rest{spec};
+    while (!rest.empty()) {
+        const size_t end = rest.find_first_of(";/");
+        const std::string_view entry = rest.substr(0, end);
+        rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end + 1);
+        const size_t eq = entry.find('=');
+        if (eq == std::string_view::npos || entry.substr(0, eq) != wanted) continue;
+        unsigned long long mask = 0;
+        std::string_view cpus = entry.substr(eq + 1);
+        while (!cpus.empty()) {
+            const size_t comma = cpus.find(',');
+            const std::string_view item = cpus.substr(0, comma);
+            cpus = comma == std::string_view::npos ? std::string_view{} : cpus.substr(comma + 1);
+            unsigned cpu = 0;
+            for (const char ch : item) {
+                if (ch < '0' || ch > '9') break;
+                cpu = cpu * 10 + static_cast<unsigned>(ch - '0');
+            }
+            if (!item.empty() && cpu < 64) mask |= 1ULL << cpu;
+        }
+        return mask;
+    }
+    return 0;
+}
 void PlaceSecondary(const char* name) {
-    if (!placement_secondary.load(std::memory_order_relaxed) || !secondary_cpus) return;
+    unsigned long long cpus = PlacementOverride(name);
+    if (cpus == 0) {
+        if (!placement_secondary.load(std::memory_order_relaxed) || !secondary_cpus) return;
+        cpus = secondary_cpus;
+    }
     cpuset_t mask{};
     for (unsigned cpu = 0; cpu < 64; ++cpu)
-        if (secondary_cpus & (1ULL << cpu)) CPU_SET(cpu, &mask);
+        if (cpus & (1ULL << cpu)) CPU_SET(cpu, &mask);
     const int result = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, 8, &mask);
     if (secondary_reports.fetch_add(1, std::memory_order_relaxed) < 64)
-        std::printf("EDEN_WORKER_PLACED name=%s mask=%llx error=%d\n", name, secondary_cpus, result ? errno : 0);
+        std::printf("EDEN_WORKER_PLACED name=%s mask=%llx error=%d\n", name, cpus, result ? errno : 0);
 }
 void PinWorker(unsigned index, cpuset_t& affinity) {
-    if (!worker_topology_ready || index >= worker_cpus.size() ||
-        !CPU_ISSET(worker_cpus[index], topology_allowed_valid ? &topology_allowed : &affinity)) return;
+    if (!worker_topology_ready || index >= worker_cpus.size()) return;
+    unsigned cpu = worker_cpus[index];
+    if (const unsigned long long over = PlacementOverride(names[index]); over != 0) {
+        cpu = static_cast<unsigned>(__builtin_ctzll(over));
+    }
+    if (!CPU_ISSET(cpu, topology_allowed_valid ? &topology_allowed : &affinity)) return;
     cpuset_t one{}, verified{};
-    CPU_SET(worker_cpus[index], &one);
+    CPU_SET(cpu, &one);
     if (cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, 8, &one)) {
         std::printf("EDEN_WORKER_PIN name=%s error=%d\n", names[index], errno);
         return;
@@ -236,7 +276,7 @@ void PinWorker(unsigned index, cpuset_t& affinity) {
         return;
     }
     affinity = verified;
-    std::printf("EDEN_WORKER_PIN name=%s cpu=%u verified=1\n", names[index], worker_cpus[index]);
+    std::printf("EDEN_WORKER_PIN name=%s cpu=%u verified=1\n", names[index], cpu);
 }
 #endif
 bool cpu_clocks_valid = false;
