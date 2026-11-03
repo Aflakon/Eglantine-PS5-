@@ -1,0 +1,72 @@
+diff --git a/src/core/memory.cpp b/src/core/memory.cpp
+index cfc39916db..1f7315f3c1 100644
+--- a/src/core/memory.cpp
++++ b/src/core/memory.cpp
+@@ -549,6 +549,8 @@ struct Memory::Impl {
+     }
+ 
+     void RasterizerArmReadTraps(u64 vaddr, u64 size) {
++        // Clean cached read areas also need invalidation when reactive flushing is enabled.
++        read_trap_generation.fetch_add(1, std::memory_order_release);
+         if (vaddr == 0 || size == 0 || !AddressSpaceContains(*current_page_table, vaddr, size) ||
+             !ReadTrapsEnabled()) {
+             return;
+@@ -781,6 +783,19 @@ struct Memory::Impl {
+             gpu_device_memory = &system.Host1x().MemoryManager();
+         }
+         const size_t core = system.GetCurrentHostThreadID();
++        if (core >= Core::Hardware::NUM_CPU_CORES) {
++            // A service thread has no slot in the arrays below, and it does not use a slot of a
++            // core. It keeps no area, so it asks on each read.
++            if (static std::atomic_flag logged; !logged.test_and_set(std::memory_order_relaxed)) {
++                LOG_INFO(HW_Memory, "Read of cached guest memory from a thread that is not a core");
++            }
++            Common::ScratchBuffer<u32> scratch;
++            gpu_device_memory->ApplyOpOnPointer(p, scratch, [&](DAddr address) {
++                DisarmReadTraps(v_address, size);
++                (void)system.GPU().OnCPURead(address, size);
++            });
++            return;
++        }
+         auto& current_area = rasterizer_read_areas[core];
+         if (const u64 generation = read_trap_generation.load(std::memory_order_acquire);
+             read_area_generations[core] != generation) {
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index 481b2f0f32..f6d394ce81 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -234,8 +234,17 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+     };
+     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
+                                            device_addr_end_aligned - device_addr_start_aligned);
+-    memory_tracker.MarkRegionAsPreflushable(device_addr_start_aligned,
+-                                            device_addr_end_aligned - device_addr_start_aligned);
++    // Mark only data that the GPU wrote. A mark stays for the session and sends later GPU writes
++    // in the range to a download at each fence.
++    if (!area->preemtive) {
++        memory_tracker.MarkRegionAsPreflushable(device_addr_start_aligned,
++                                                device_addr_end_aligned - device_addr_start_aligned);
++    } else {
++        // The core keeps this area and has no mark. The next GPU write here must arm the range
++        // again, which ends the area and sets the trap.
++        read_trapped_ranges.Subtract(device_addr_start_aligned,
++                                     device_addr_end_aligned - device_addr_start_aligned);
++    }
+     return area;
+ }
+ 
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index 53f8f063f7..681a4a232d 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -228,7 +228,9 @@ struct GPU::Impl {
+                      raster_area.start_address, raster_area.end_address,
+                      reads.load(std::memory_order_relaxed));
+         }
+-        const u64 fence = RequestSyncOperation([this, &raster_area]() {
++        const u64 fence = RequestSyncOperation([this, raster_area]() {
++            // Apply collected guest writes before downloading GPU data over guest memory.
++            InvalidateGPUCache();
+             renderer->ReadRasterizer()->FlushRegion(raster_area.start_address, raster_area.end_address - raster_area.start_address);
+         });
+         gpu_thread.TickGPU(is_async);

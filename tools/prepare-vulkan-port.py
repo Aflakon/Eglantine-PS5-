@@ -16,6 +16,14 @@ def adapt(relative, destination, replacements):
             if marker in text:
                 old = old.replace('// update engine as channel may be different.', marker)
                 new = new.replace('// update engine as channel may be different.', marker)
+        if relative.endswith('/vk_rasterizer.cpp') and old.startswith('    pipeline->SetEngine(maxwell3d, gpu_memory);') and old not in text:
+            engine = '    pipeline->SetEngine(maxwell3d, gpu_memory);\n'
+            configure = '    if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->Configure(is_indexed)) {'
+            begin = text.index(engine) + len(engine)
+            end = text.index(configure, begin)
+            repack = text[begin:end]
+            old = old.replace(engine, engine + repack)
+            new = new.replace(configure, repack + configure)
         if relative.endswith('/vulkan_memory_allocator.cpp') and old.startswith('    vk::Check(vmaCreateBuffer(') and old not in text:
             if 'VkResult result = vmaCreateBuffer(' in text:
                 # This core already retries outside the driver budget on allocation failure.
@@ -909,8 +917,11 @@ gc_setup = '''    const auto ReclaimedBytes = [&](const Image& image) {
 ''' + reclaimed_bytes + '''        return bytes;
     };
 ''' + (port / 'vulkan_gc_downloads.inc').read_text()
+cleanup_begin = gc.index('    const auto Cleanup = [')
+cleanup_end = gc.index('](ImageId image_id)', cleanup_begin) + 1
+cleanup_capture = gc[cleanup_begin:cleanup_end]
 for old, new in [
-    ('    const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode]',
+    (cleanup_capture,
      gc_setup + '\n    const auto Cleanup = [&, this]'),
     ('        if (must_download) {', '        if (must_download && !TakePrefetched(image_id, image)) {'),
     # Time the per-image drain Cleanup still takes for an image the prefetch could not batch.
@@ -1170,6 +1181,20 @@ for statement in (
         'auto cfg_cost = Eden::Performance::VulkanTimer(20);\n        ' + statement +
         '\n        cfg_cost.reset();')
 for old, new in shader_costs:
+    if old == '}\n\nPipelineCache::~PipelineCache()' and old not in shader_source:
+        boundary = '}\n\nnamespace {\n// <title>/vulkan_used.bin'
+        new = new.replace(old, boundary)
+        old = boundary
+    if old.startswith('    current_pipeline = pipeline.get();') and old not in shader_source:
+        mark_used = '    current_pipeline->MarkUsed(frame_count);\n'
+        old = old.replace('    return BuiltPipeline', mark_used + '    return BuiltPipeline')
+        new = new.replace('    current_pipeline = pipeline.get();\n',
+                          '    current_pipeline = pipeline.get();\n' + mark_used)
+    if 'Shader::TensorRejected' in old and 'Shader::TensorRejected' not in shader_source:
+        old = ('    if (!is_new) {\n        return pipeline.get();\n    }\n'
+               '    pipeline = CreateComputePipeline(key, shader);\n    return pipeline.get();\n}')
+        trace = new[new.index('    if (::Eden::DevVulkan::trace_pipelines && pipeline)'):]
+        new = ('    if (is_new) {\n        pipeline = CreateComputePipeline(key, shader);\n    }\n' + trace)
     if shader_source.count(old) != 1:
         raise RuntimeError(f'Shader pipeline anchor changed: {old[:60]}')
     shader_source = shader_source.replace(old, new)

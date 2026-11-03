@@ -16,6 +16,7 @@ code=r'''
 using DAddr=unsigned long;using VAddr=unsigned long;
 namespace Common::Literals {}
 namespace Core {struct Asid {size_t id;};}
+namespace Devices {struct Nx2GpuMemoryRegistry {std::vector<size_t> forgotten; static Nx2GpuMemoryRegistry& Get(){static Nx2GpuMemoryRegistry r;return r;} void ForgetDeviceRanges(size_t asid){forgotten.push_back(asid);}};}
 namespace Kernel {struct KProcess {int refs=1,memory=7; bool registered=false; int& GetMemory(){assert(refs);return memory;} void Open(int){assert(refs);++refs;} void Close(int){assert(refs);if(!--refs){assert(!registered);memory=0;}}};}
 struct SessionId {size_t id;};
 struct Mapper {DAddr GetRegionStart(){return 4096;}size_t GetRegionSize(){return 4096;}};
@@ -34,8 +35,12 @@ int main(){
  auto d=c.OpenSession(&q);assert(d.id==a.id && q.refs==2);
  c.impl->sessions[d.id].mapper=std::make_unique<Mapper>();c.impl->sessions[d.id].has_preallocated_area=true;
  c.CloseSession(d);assert(q.refs==1 && !q.registered);q.Close(0);
+ REGISTRY_CHECK
 }
 '''
+code=code.replace('REGISTRY_CHECK',
+    'assert(Devices::Nx2GpuMemoryRegistry::Get().forgotten == std::vector<size_t>({0,1}));'
+    if 'ForgetDeviceRanges' in closing else '')
 with tempfile.TemporaryDirectory() as d:
  p=Path(d);(p/'test.cpp').write_text(code)
  subprocess.run(['clang++-18','-std=c++20','-fsanitize=address,undefined','-g',str(p/'test.cpp'),'-o',str(p/'test')],check=True)

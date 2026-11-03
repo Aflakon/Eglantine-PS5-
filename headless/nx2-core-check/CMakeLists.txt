@@ -14,18 +14,31 @@ FetchContent_Declare(Catch2
     URL_HASH "SHA512=${catch_hash}")
 FetchContent_MakeAvailable(Catch2)
 file(GLOB ampere_tests CONFIGURE_DEPENDS "${EDEN_SOURCE}/src/tests/video_core/ampere_*.cpp")
-# These two integration tests link the complete shader compiler and run in upstream tests.
-# This host check exercises the header-only native capture/lowering and memory helpers.
-list(FILTER ampere_tests EXCLUDE REGEX "ampere_(bindless_tex|sured)\\.cpp$")
-add_executable(nx2-core-check ${ampere_tests}
-    "${EDEN_SOURCE}/src/tests/core/read_traps.cpp"
-    "${EDEN_SOURCE}/src/tests/core/nx2_readback_cache.cpp"
-    "${EDEN_SOURCE}/src/tests/core/nx2_core_readback_capacity.cpp"
-    "${EDEN_SOURCE}/src/tests/video_core/nx2_gpu_mappings.cpp"
-    "${EDEN_SOURCE}/src/tests/video_core/nx2_command_ranges.cpp"
-    "${EDEN_SOURCE}/src/tests/video_core/nx2_command_sync.cpp"
-    "${EDEN_SOURCE}/src/tests/video_core/nx2_sparse_region.cpp"
-    "${EDEN_SOURCE}/src/tests/video_core/memory_budget.cpp")
+# Shader integration tests require the complete compiler and belong to the upstream test target.
+# This target checks header-only lowering, captures, command ordering and memory helpers.
+list(FILTER ampere_tests EXCLUDE REGEX "ampere_(bindless_tex|sured|async_copy)\\.cpp$")
+message(STATUS "Full-compiler integration tests are outside this header-only host target")
+set(core_regression_sources)
+foreach(relative IN ITEMS
+    "src/tests/core/read_traps.cpp"
+    "src/tests/core/nx2_readback_cache.cpp"
+    "src/tests/core/nx2_core_readback_capacity.cpp"
+    "src/tests/video_core/nx2_gpu_mappings.cpp"
+    "src/tests/video_core/nx2_command_ranges.cpp"
+    "src/tests/video_core/nx2_command_sync.cpp"
+    "src/tests/video_core/nx2_sparse_region.cpp"
+    "src/tests/video_core/memory_budget.cpp"
+    "src/tests/video_core/command_fetch_order.cpp"
+    "src/tests/video_core/async_draw_policy.cpp"
+    "src/tests/video_core/multi_range_refresh.cpp"
+)
+    if(EXISTS "${EDEN_SOURCE}/${relative}")
+        list(APPEND core_regression_sources "${EDEN_SOURCE}/${relative}")
+    else()
+        message(STATUS "This core does not provide ${relative}")
+    endif()
+endforeach()
+add_executable(nx2-core-check ${ampere_tests} ${core_regression_sources})
 file(GLOB boost_includes "${DEPENDENCY_SOURCE}/.cache/cpm/boost/*/libs/*/include")
 target_include_directories(nx2-core-check PRIVATE "${EDEN_SOURCE}/src" "${FMT_INCLUDE}" ${boost_includes})
 target_link_libraries(nx2-core-check PRIVATE Catch2::Catch2WithMain)

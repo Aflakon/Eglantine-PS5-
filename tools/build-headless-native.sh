@@ -90,6 +90,8 @@ python3 -B "$root/tools/check-jit-assert.py"
 python3 -B "$root/tools/check-crash-report.py"
 python3 -B "$root/tools/check-system-keyboard.py"
 python3 -B "$root/tools/check-nx2-core.py"
+python3 -B "$root/tools/check-shader-attributes.py"
+python3 -B "$root/tools/check-bananza-terrain.py"
 
 if [[ "$probe" == OFF ]]; then
     python3 -B "$root/tools/check-exclusive-monitor.py"

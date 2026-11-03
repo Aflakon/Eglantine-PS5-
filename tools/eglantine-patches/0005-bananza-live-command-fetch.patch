@@ -1,0 +1,16 @@
+diff --git a/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp b/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
+index 848c15d6f8..1a97666458 100644
+--- a/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
++++ b/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
+@@ -445,7 +445,10 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
+             const char* value = std::getenv("EDEN_NX2_PB_SNAPSHOT");
+             return value == nullptr || value[0] != '0';
+         }();
+-        if (snapshot && channel_state->memory_manager) {
++        // Bananza's startup command snapshots can contain only zeroes. Fetch its streams at
++        // execution so queue initialization and semaphore releases are not lost.
++        const bool snapshot_title = system.GetApplicationProcessProgramID() != 0x040074a01bf12000ULL;
++        if (snapshot && snapshot_title && channel_state->memory_manager) {
+             size_t words = 0;
+             for (const auto& entry : entries.command_lists) {
+                 words += entry.size;
