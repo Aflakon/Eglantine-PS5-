@@ -169,6 +169,9 @@ include("${EDEN_PORT_DIR}/jit-alias.cmake")
         "        , EdenJitAllocator())\n    , constant_pool" code_source "${code_source}")
     string(REPLACE "        , nullptr)\n#endif\n    , constant_pool"
         "        , EdenJitAllocator())\n#endif\n    , constant_pool" code_source "${code_source}")
+    # Newer cores name the default (CodeAllocator(): nullptr off Windows).
+    string(REPLACE "        , CodeAllocator())\n    , constant_pool"
+        "        , EdenJitAllocator())\n    , constant_pool" code_source "${code_source}")
     string(FIND "${code_source}" ", EdenJitAllocator())" port_jit_allocator)
     if(port_jit_allocator LESS 0)
         message(FATAL_ERROR "JIT allocator adapter did not apply")
