@@ -110,6 +110,22 @@ index 69e9c90..0bc5228 100644
      std::mutex mutex;
      std::condition_variable_any available;
      std::deque<T> entries;
+diff --git a/src/common/lru_cache.h b/src/common/lru_cache.h
+index 952ba0e..7a2b7d4 100644
+--- a/src/common/lru_cache.h
++++ b/src/common/lru_cache.h
+@@ -52,6 +52,11 @@ public:
+         Attach(item);
+     }
+ 
++    /// The tick the item was last touched with.
++    TickType Tick(size_t id) const {
++        return item_pool[id].tick;
++    }
++
+     void Free(size_t id) {
+         auto& item = item_pool[id];
+         Detach(item);
 diff --git a/src/core/memory.cpp b/src/core/memory.cpp
 index 91c5bf8..ce2cc17 100644
 --- a/src/core/memory.cpp
@@ -197,23 +213,34 @@ index 5e32d64..66305ed 100644
 +    REQUIRE(drains == 0);
  }
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
-index 2b50b51..8e06cdf 100644
+index 2b50b51..e600647 100644
 --- a/src/video_core/dma_pusher.cpp
 +++ b/src/video_core/dma_pusher.cpp
-@@ -770,8 +770,11 @@ void DmaPusher::CallMethod(u32 argument) {
+@@ -770,13 +770,22 @@ void DmaPusher::CallMethod(u32 argument) {
          }
          if (split.Active()) {
              const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
 +            const auto type = subchannel_type[dma_state.subchannel];
-+            // Engines that write guest memory: a GPU-written command list waits for the back
-+            // only up to the last of their methods (DrainToLastWriter), not for every draw.
-+            const bool writer = type != Engines::EngineTypes::Maxwell3D;
++            // Engines that write guest memory, and the 3D engine's inline uploads: a GPU-written
++            // command list waits for the back only up to the last of their methods
++            // (DrainToLastWriter), not for every draw.
++            const bool writer = type != Engines::EngineTypes::Maxwell3D ||
++                                dma_state.method == (offsetof(Engines::Maxwell3D::Regs, launch_dma) / sizeof(u32)) ||
++                                dma_state.method == (offsetof(Engines::Maxwell3D::Regs, inline_data) / sizeof(u32));
              if (split.FrontMacros()) {
 -                const auto type = subchannel_type[dma_state.subchannel];
                  if (type == Engines::EngineTypes::Maxwell3D) {
                      auto* const maxwell3d = static_cast<Engines::Maxwell3D*>(subchannel);
                      if (maxwell3d->GetNativeMacroEngine().native_turing) {
-@@ -784,12 +787,16 @@ void DmaPusher::CallMethod(u32 argument) {
+                         maxwell3d->FrontCallMethod(system, split, dma_state.method, argument,
+                                                    dma_state.is_last_call);
++                        if (writer) {
++                            split.NoteWriter();
++                        }
+                         return;
+                     }
+                 } else if (type == Engines::EngineTypes::KeplerCompute) {
+@@ -784,12 +793,16 @@ void DmaPusher::CallMethod(u32 argument) {
                      if (compute->FrontRunsMacros()) {
                          compute->FrontCallMethod(system, split, dma_state.method, argument,
                                                   dma_state.is_last_call, &segment);
@@ -230,18 +257,29 @@ index 2b50b51..8e06cdf 100644
              return;
          }
          if (!subchannel->execution_mask[dma_state.method]) {
-@@ -839,8 +846,9 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+@@ -839,13 +852,20 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
          }
          if (split.Active()) {
              const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
 +            const auto type = subchannel_type[dma_state.subchannel];
-+            const bool writer = type != Engines::EngineTypes::Maxwell3D;
++            // A multi-word write to the inline data register is an upload too.
++            const bool writer = type != Engines::EngineTypes::Maxwell3D ||
++                                dma_state.method <= (offsetof(Engines::Maxwell3D::Regs, inline_data) / sizeof(u32)) &&
++                                    dma_state.method + num_methods > (offsetof(Engines::Maxwell3D::Regs, launch_dma) / sizeof(u32));
              if (split.FrontMacros()) {
 -                const auto type = subchannel_type[dma_state.subchannel];
                  if (type == Engines::EngineTypes::Maxwell3D) {
                      auto* const maxwell3d = static_cast<Engines::Maxwell3D*>(subchannel);
                      if (maxwell3d->GetNativeMacroEngine().native_turing) {
-@@ -853,12 +861,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+                         maxwell3d->FrontCallMultiMethod(system, split, dma_state.method, base_start,
+                                                         num_methods, dma_state.method_count);
++                        if (writer) {
++                            split.NoteWriter();
++                        }
+                         return;
+                     }
+                 } else if (type == Engines::EngineTypes::KeplerCompute) {
+@@ -853,12 +873,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
                      if (compute->FrontRunsMacros()) {
                          compute->FrontCallMultiMethod(system, split, dma_state.method, base_start,
                                                        num_methods, dma_state.method_count, &segment);
@@ -258,7 +296,7 @@ index 2b50b51..8e06cdf 100644
              return;
          }
          VideoCommon::Nx2Profile::Scope method_scope{VideoCommon::Nx2Profile::Zone::Method};
-@@ -889,7 +901,7 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
+@@ -889,7 +913,7 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
      }
      Nx2SynchronizeGpuWrittenCommands(address, size,
          [] {
@@ -464,7 +502,7 @@ index d1f1245..c71faa6 100644
              event_cv.wait(lk, stop_token, [&] {
                  worker_waiting = !TryPopQueue(work);
 diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
-index 59e4dcb..fe79caa 100644
+index 59e4dcb..94ea047 100644
 --- a/src/video_core/texture_cache/texture_cache.h
 +++ b/src/video_core/texture_cache/texture_cache.h
 @@ -166,6 +166,20 @@ void TextureCache<P>::RunGarbageCollector() {
@@ -481,7 +519,7 @@ index 59e4dcb..fe79caa 100644
 +            return value != nullptr ? std::strtoull(value, nullptr, 10) : 0ULL;
 +        }();
 +        if (aggressive_mode && costly_min_age != 0 && True(image.flags & ImageFlagBits::CostlyLoad) &&
-+            frame_tick - image.frame_tick < costly_min_age) {
++            frame_tick - lru_cache.Tick(image.lru_index) < costly_min_age) {
 +            ++probe_costly_skips;
 +            return false;
 +        }
