@@ -1,0 +1,16 @@
+diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
+index 01e13cb384..e8f8195279 100644
+--- a/src/video_core/vulkan_common/vulkan_device.cpp
++++ b/src/video_core/vulkan_common/vulkan_device.cpp
+@@ -798,7 +798,10 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+ 
+     vk::Check(vmaCreateAllocator(&allocator_info, &allocator));
+ 
+-    owns_static_pipeline_cache = surface != VkSurfaceKHR{};
++    // The console's driver hung the game at its first compute work when it started from the saved
++    // cache of an earlier run (Switch 2 title, every launch after the first). Start empty and keep
++    // nothing: the per-game pipeline caches still work.
++    owns_static_pipeline_cache = false;
+     LoadStaticPipelineCache();
+ 
+     // Initialize GPU logging if enabled
