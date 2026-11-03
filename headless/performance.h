@@ -392,6 +392,9 @@ inline std::atomic<bool> texture_budget_log{false};
 // header is compiled into libraries with and without PS5_NATIVE, so the function below must read
 // the same in all of them: the platform part is behind this pointer, not behind an #ifdef.
 inline std::atomic<bool (*)()> graphics_memory_probe{nullptr};
+// The kernel's count of the guest's mapped physical memory, installed while a game runs (main.cpp):
+// the memory report tells it from the slots the sparse backing committed.
+inline std::atomic<unsigned long long (*)()> guest_kernel_memory{nullptr};
 // Graphics memory still free: the largest block of the direct memory pool, which is what the
 // driver's next allocation can be given. Installed by the PS5 build (performance.cpp).
 //

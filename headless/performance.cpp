@@ -384,8 +384,11 @@ static void RefreshFreeMemory() {
         summary_ns.store(now, std::memory_order_relaxed);
         std::size_t guest_span = 0, guest_held = 0;
         ::Common::GuestMemoryUsage(&guest_span, &guest_held);
-        std::fprintf(stderr, "EDEN_MEMORY pool largest free block %zu MiB, short=%d; the guest's memory holds %zu MiB\n",
-                     largest >> 20, int(view.short_memory), guest_held >> 20);
+        const auto kernel_memory = guest_kernel_memory.load(std::memory_order_relaxed);
+        std::fprintf(stderr, "EDEN_MEMORY pool largest free block %zu MiB, short=%d; the guest's memory holds %zu MiB"
+                     " (the kernel maps %llu MiB)\n",
+                     largest >> 20, int(view.short_memory), guest_held >> 20,
+                     kernel_memory ? kernel_memory() >> 20 : 0ULL);
         ReportHeap("every 20 s");
     }
     // The heap's empty spaces go back to the pool while it is short (every 2 s at most).

@@ -1582,6 +1582,15 @@ int main(int argc, char** argv) {
                 }
                 Eden::TakeGuestFault(); // Nothing from an earlier session belongs to this one.
                 Eden::Loading::Set(Eden::Loading::Step::starting);
+                // The memory report's kernel-side figure (performance.cpp), for this game.
+                static Core::System* reporting_system = nullptr;
+                reporting_system = &system;
+                Eden::Performance::guest_kernel_memory.store([]() -> unsigned long long {
+                    auto* const running = reporting_system;
+                    if (!running || !running->IsPoweredOn()) return 0;
+                    auto* const process = running->ApplicationProcess();
+                    return process ? process->GetUsedUserPhysicalMemorySize(running->Kernel()) : 0;
+                });
                 system.Run();
 #if defined(EDEN_DEV_PROFILE) && defined(PS5_NATIVE)
                 Eden::Stall::Trace("main running");

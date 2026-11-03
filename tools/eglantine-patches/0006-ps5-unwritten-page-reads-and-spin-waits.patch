@@ -196,6 +196,190 @@ index 5e32d64..66305ed 100644
 -    REQUIRE(drains == 1);
 +    REQUIRE(drains == 0);
  }
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index 2b50b51..8e06cdf 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -770,8 +770,11 @@ void DmaPusher::CallMethod(u32 argument) {
+         }
+         if (split.Active()) {
+             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
++            const auto type = subchannel_type[dma_state.subchannel];
++            // Engines that write guest memory: a GPU-written command list waits for the back
++            // only up to the last of their methods (DrainToLastWriter), not for every draw.
++            const bool writer = type != Engines::EngineTypes::Maxwell3D;
+             if (split.FrontMacros()) {
+-                const auto type = subchannel_type[dma_state.subchannel];
+                 if (type == Engines::EngineTypes::Maxwell3D) {
+                     auto* const maxwell3d = static_cast<Engines::Maxwell3D*>(subchannel);
+                     if (maxwell3d->GetNativeMacroEngine().native_turing) {
+@@ -784,12 +787,16 @@ void DmaPusher::CallMethod(u32 argument) {
+                     if (compute->FrontRunsMacros()) {
+                         compute->FrontCallMethod(system, split, dma_state.method, argument,
+                                                  dma_state.is_last_call, &segment);
++                        split.NoteWriter();
+                         return;
+                     }
+                 }
+             }
+             split.Method(subchannel, dma_state.method, argument, dma_state.is_last_call,
+                          WantsSegment() ? &segment : nullptr);
++            if (writer) {
++                split.NoteWriter();
++            }
+             return;
+         }
+         if (!subchannel->execution_mask[dma_state.method]) {
+@@ -839,8 +846,9 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+         }
+         if (split.Active()) {
+             const GPUVAddr segment = dma_state.dma_get + dma_state.dma_word_offset;
++            const auto type = subchannel_type[dma_state.subchannel];
++            const bool writer = type != Engines::EngineTypes::Maxwell3D;
+             if (split.FrontMacros()) {
+-                const auto type = subchannel_type[dma_state.subchannel];
+                 if (type == Engines::EngineTypes::Maxwell3D) {
+                     auto* const maxwell3d = static_cast<Engines::Maxwell3D*>(subchannel);
+                     if (maxwell3d->GetNativeMacroEngine().native_turing) {
+@@ -853,12 +861,16 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+                     if (compute->FrontRunsMacros()) {
+                         compute->FrontCallMultiMethod(system, split, dma_state.method, base_start,
+                                                       num_methods, dma_state.method_count, &segment);
++                        split.NoteWriter();
+                         return;
+                     }
+                 }
+             }
+             split.MultiMethod(subchannel, dma_state.method, base_start, num_methods,
+                               dma_state.method_count, WantsSegment() ? &segment : nullptr);
++            if (writer) {
++                split.NoteWriter();
++            }
+             return;
+         }
+         VideoCommon::Nx2Profile::Scope method_scope{VideoCommon::Nx2Profile::Zone::Method};
+@@ -889,7 +901,7 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
+     }
+     Nx2SynchronizeGpuWrittenCommands(address, size,
+         [] {
+-            if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) split.Drain();
++            if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) split.DrainToLastWriter();
+         },
+         [&](GPUVAddr page) { return memory_manager.GpuToCpuAddress(page); },
+         [&] {
+diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
+index 2bcc6c1..aa3e3d6 100644
+--- a/src/video_core/engines/puller.cpp
++++ b/src/video_core/engines/puller.cpp
+@@ -44,6 +44,19 @@ u32 ReadSemaphoreWord(DmaPusher& dma_pusher, GPUVAddr address) {
+     return dma_pusher.memory_manager.Read<u32>(address);
+ }
+ 
++// Whether an acquire may be answered from the guest's own copy of the word before the split's
++// back is drained (EDEN_NX2_ACQUIRE_DRAIN_FIRST=1: always drain first). The back writes a
++// release's value straight into guest memory, so a word that already meets the acquire is final
++// for a counter that only grows; one that does not takes the drained path below as before. At
++// Mario Kart World's title screen the unconditional drain was 39% of the front thread's time.
++bool AcquireChecksRawWordFirst() {
++    static const bool drain_first = [] {
++        const char* value = std::getenv("EDEN_NX2_ACQUIRE_DRAIN_FIRST");
++        return value != nullptr && value[0] == '1';
++    }();
++    return !drain_first;
++}
++
+ // With the GPU thread split (gpu_split.h) the rasterizer belongs to the back thread: work that
+ // only feeds it runs there in order; reads of what it wrote first wait for it (DrainBack).
+ template <typename Func>
+@@ -80,6 +93,10 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
+     }
+     // The release may still be queued for the split GPU thread's back half (and the caches
+     // ReadSemaphoreWord asks are its state).
++    if (AcquireChecksRawWordFirst() &&
++        pending_acquire->Matches(dma_pusher.memory_manager.Read<u32>(pending_acquire->address))) {
++        return true;
++    }
+     DrainBack();
+     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
+     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
+@@ -245,6 +262,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+             return;
+         }
+         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
++        if (AcquireChecksRawWordFirst() &&
++            acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
++            return;
++        }
+         DrainBack();
+         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+             return;
+diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
+index fd7e308..5c59402 100644
+--- a/src/video_core/gpu_split.cpp
++++ b/src/video_core/gpu_split.cpp
+@@ -216,6 +216,36 @@ void GpuSplit::Drain() {
+     }
+ }
+ 
++void GpuSplit::DrainToLastWriter() {
++    // EDEN_NX2_LIST_DRAIN_FULL=1: wait for everything sent, as before (every draw too).
++    static const bool full = [] {
++        const char* value = std::getenv("EDEN_NX2_LIST_DRAIN_FULL");
++        return value != nullptr && value[0] == '1';
++    }();
++    if (full) {
++        Drain();
++        return;
++    }
++    const u64 position = last_writer_position;
++    consumed_cache = consumed.load(std::memory_order_acquire);
++    if (consumed_cache >= position) {
++        return;
++    }
++    Publish();
++    Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
++    for (u32 spins = 0;; ++spins) {
++        consumed_cache = consumed.load(std::memory_order_acquire);
++        if (consumed_cache >= position) {
++            return;
++        }
++        if (spins < 16384) {
++            Pause();
++        } else {
++            std::this_thread::yield();
++        }
++    }
++}
++
+ void GpuSplit::SwitchEngine(Tegra::Engines::EngineInterface* engine) {
+     front_engine = engine;
+     u64* const entry = Reserve(2);
+diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
+index ebd348d..bc3742f 100644
+--- a/src/video_core/gpu_split.h
++++ b/src/video_core/gpu_split.h
+@@ -103,6 +103,13 @@ public:
+     void Publish();
+     /// Waits until the back executed everything sent so far.
+     void Drain();
++    /// The entry just sent can write guest memory (a compute, copy or upload engine's method):
++    /// a command list on a GPU-written page waits for the back only up to here (DrainToLastWriter).
++    void NoteWriter() {
++        last_writer_position = write_position;
++    }
++    /// Waits until the back executed the last entry that could have written guest memory.
++    void DrainToLastWriter();
+ 
+ private:
+     enum class Kind : u64 {
+@@ -160,6 +167,7 @@ private:
+ 
+     // Front side.
+     u64 write_position{};
++    u64 last_writer_position{};
+     u64 published_local{};
+     u64 consumed_cache{};
+     /// Words between publishes: small right after a drain, while the back has nothing to do.
 diff --git a/src/video_core/nx2.h b/src/video_core/nx2.h
 index 321c8b4..f62797d 100644
 --- a/src/video_core/nx2.h
@@ -279,3 +463,28 @@ index d1f1245..c71faa6 100644
              // Wait for work.
              event_cv.wait(lk, stop_token, [&] {
                  worker_waiting = !TryPopQueue(work);
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index 59e4dcb..fe79caa 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -166,6 +166,20 @@ void TextureCache<P>::RunGarbageCollector() {
+             return false;
+         }
+         const bool must_download = IsDownloadable(image) && False(image.flags & ImageFlagBits::BadOverlap);
++        // A costly image (decoded ASTC) evicted in aggressive mode comes back through the GPU
++        // decoder the next time it is drawn: at Mario Kart World's title screen on the console,
++        // where the shared pool stays short, the collector evicted ~2,300 of them per 600 frames
++        // and the back thread spent 130 ms a second re-uploading. Such an image is kept while it
++        // was used within EDEN_NX2_TC_COSTLY_MIN_AGE frames (0: the usual 10 of aggressive mode).
++        static const u64 costly_min_age = [] {
++            const char* value = std::getenv("EDEN_NX2_TC_COSTLY_MIN_AGE");
++            return value != nullptr ? std::strtoull(value, nullptr, 10) : 0ULL;
++        }();
++        if (aggressive_mode && costly_min_age != 0 && True(image.flags & ImageFlagBits::CostlyLoad) &&
++            frame_tick - image.frame_tick < costly_min_age) {
++            ++probe_costly_skips;
++            return false;
++        }
+         if ((!aggressive_mode && True(image.flags & ImageFlagBits::CostlyLoad)) || (!high_priority_mode && must_download)) {
+             probe_costly_skips += !aggressive_mode && True(image.flags & ImageFlagBits::CostlyLoad);
+             probe_dirty_skips += !high_priority_mode && must_download;
