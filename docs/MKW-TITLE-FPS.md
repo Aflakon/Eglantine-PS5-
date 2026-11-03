@@ -78,7 +78,11 @@ in the port's performance settings; the game's own values in the Library still w
   (the Vulkan worker's poll retaking the queue mutex, invalidations under inline uploads), 15%
   idle. The worker poll now reads an atomic count and the published semaphore store uses a
   spin lock (candidate 15: 21.8 and 20.8 FPS, within the 20-25 FPS run-to-run band). What is
-  left in the draw path and the churn is core work beyond a settings or synchronization fix. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
+  left in the draw path and the churn is core work beyond a settings or synchronization fix.
+- Not recording CPU-read buffer ranges (`EDEN_NX2_CPU_READ_RANGES=0`, which stops the
+  per-fence copy-backs those ranges cause: ~3,700 real fences a second) measured 20.0 FPS
+  against 24.6 for the control in the same run, and ran out of memory sooner: the fences
+  are not the limit either. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
   recently used decoded ASTC images out of aggressive collection (fewer re-uploads, less
   headroom).
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock

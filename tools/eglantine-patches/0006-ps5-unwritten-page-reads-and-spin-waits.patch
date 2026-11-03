@@ -272,6 +272,35 @@ index 5e32d64..66305ed 100644
 -    REQUIRE(drains == 1);
 +    REQUIRE(drains == 0);
  }
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index a3af402..d221ac4 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <atomic>
+ #include <cstdio>
+ #include <memory>
+@@ -813,6 +814,16 @@ void BufferCache<P>::NoteCpuRead(DAddr addr, size_t size) {
+     if (AsyncBufferDownloads()) {
+         return;
+     }
++    // EDEN_NX2_CPU_READ_RANGES=0: do not remember read ranges (console A/B: with guest reads
++    // answered on the guest core every read of a tracked page is noted, after which each GPU
++    // write there is copied back at every fence, which made ~3,700 fences a second real).
++    static const bool note_reads = [] {
++        const char* value = std::getenv("EDEN_NX2_CPU_READ_RANGES");
++        return value == nullptr || value[0] != '0';
++    }();
++    if (!note_reads) {
++        return;
++    }
+     size_t covered = 0;
+     cpu_read_ranges.ForEachInRange(addr, size,
+                                    [&](DAddr start, DAddr end) { covered += end - start; });
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
 index 2b50b51..e600647 100644
 --- a/src/video_core/dma_pusher.cpp
