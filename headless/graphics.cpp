@@ -28,6 +28,7 @@
 #include "core/frontend/graphics_context.h"
 #include "core/perf_stats.h"
 #include "video_core/renderer_base.h"
+#include "video_core/gpu_split.h"
 
 // Match the SDK native application's shim: Mesa's C TLS is initialized by
 // compiler-rt; it has no additional C++ per-thread initializer.
@@ -59,7 +60,9 @@ HudClock vulkan_hud_clock;
 HudClock vulkan_hud_output_clock;
 HudSnapshot vulkan_hud;
 double vulkan_hud_stats_time{}, vulkan_hud_speed{};
-bool vulkan_loading{};
+// Read by the GPU thread, cleared by whichever thread composites the first guest frame (the
+// split GPU thread's back, when it runs).
+std::atomic<bool> vulkan_loading{};
 double vulkan_loading_start{-1};
 unsigned vulkan_loading_frames{};
 LoadingPace vulkan_loading_pace;
@@ -513,7 +516,19 @@ bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
         if (first) vulkan_loading_start = now;
         if (vulkan_loading_pace.Due(now, idle)) {
             vulkan_hud = MakeLoadingSnapshot(now - vulkan_loading_start + LoadingCalm());
-            PresentVulkanLoading(renderer);
+            // With the split GPU thread the renderer belongs to the back thread (gpu_split.h):
+            // presenting from the front raced its composites in the scheduler and the blit
+            // screen's layers (a descriptor set allocation failed, then a null layer crashed).
+            // Send the present through the ring so it runs in order with the guest's work.
+            if (auto& split = VideoCommon::GpuSplit::Get();
+                split.Active() && !VideoCommon::GpuSplit::IsBackThread()) {
+                split.DeferFunction([&renderer] {
+                    if (vulkan_loading.load(std::memory_order_relaxed)) PresentVulkanLoading(renderer);
+                });
+                split.Publish();
+            } else {
+                PresentVulkanLoading(renderer);
+            }
             ++vulkan_loading_frames;
             if (first) sceSystemServiceHideSplashScreen();
         }

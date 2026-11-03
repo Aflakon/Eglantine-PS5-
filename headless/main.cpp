@@ -511,6 +511,17 @@ int main(int argc, char** argv) {
 #endif
         setenv("EDEN_NX2_SPARSE_UNBACKED", "1", 1);
         setenv("EDEN_HOST_RESERVE_TRANSFER", "1", 1);
+        {
+            // Development: env.txt in the app folder sets core switches (NAME=VALUE per line,
+            // e.g. EDEN_NX2_GPU_PROFILE=1) before the core reads them. Absent in a release.
+            std::ifstream environment(Eden::AppFile("env.txt"));
+            for (std::string entry; std::getline(environment, entry);) {
+                const auto split = entry.find('=');
+                if (entry.empty() || entry[0] == '#' || split == std::string::npos || split == 0) continue;
+                setenv(entry.substr(0, split).c_str(), entry.c_str() + split + 1, 1);
+                std::printf("EDEN_ENV %s\n", entry.c_str());
+            }
+        }
 #ifdef EDEN_MKW_DIAGNOSTICS
         // Temporary capture for the Mario Kart World loading-screen investigation.
         const auto diagnostic_capture_dir = Eden::LogFile("mkw-gpfifo-" + std::to_string(getpid()));
@@ -774,6 +785,9 @@ int main(int argc, char** argv) {
 #if defined(PS5_NATIVE) && !defined(EDEN_DEV_PROFILE) && !defined(EDEN_DEV_ROM_ID)
             if (Eden::LoadPreferences().detailed_logging) filter.ParseFilterString("*:Debug");
 #endif
+            // Development: EDEN_LOG_FILTER (env.txt) names an Eden log filter, e.g. *:Info HW.GPU:Debug.
+            if (const char* development_filter = std::getenv("EDEN_LOG_FILTER"))
+                filter.ParseFilterString(development_filter);
             Common::Log::SetGlobalFilter(filter);
         }
         Common::Log::Start();
