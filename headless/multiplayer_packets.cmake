@@ -318,6 +318,12 @@ file(WRITE "${MULTIPLAYER_OUTPUT}/network_interface.cpp.in" "${interface_source}
 configure_file("${MULTIPLAYER_OUTPUT}/network_interface.cpp.in"
     "${MULTIPLAYER_OUTPUT}/network_interface.cpp" COPYONLY)
 
+# Newer cores (the November 2026 nx2 line) harden the room sockets themselves: a locked descriptor table
+# with shared sockets, AcceptsProxyPacket, a condition variable in ProxySocket. Replacing their
+# socket_proxy.cpp / bsd.cpp with our older design would undo that, so only older cores are rewritten.
+file(READ "${MULTIPLAYER_SOURCE}/src/core/internal_network/socket_proxy.h" proxy_probe)
+string(FIND "${proxy_probe}" "AcceptsProxyPacket" core_hardens_sockets)
+if(core_hardens_sockets LESS 0)
 file(READ "${MULTIPLAYER_SOURCE}/src/core/internal_network/socket_proxy.h" proxy_header)
 multiplayer_replace(proxy_header "    bool IsOpened() const override;"
     "    bool IsOpened() const override;\n    std::optional<PollEvents> PollProxy(PollEvents events) override;")
@@ -472,6 +478,8 @@ string(APPEND bsd_source "\nnamespace Service::Sockets {\n#include \"multiplayer
 file(WRITE "${MULTIPLAYER_OUTPUT}/bsd.cpp.in" "${bsd_source}")
 configure_file("${MULTIPLAYER_OUTPUT}/bsd.cpp.in" "${MULTIPLAYER_OUTPUT}/bsd.cpp" COPYONLY)
 
+endif()
+
 if(TARGET network)
     get_target_property(packet_sources network SOURCES)
     list(REMOVE_ITEM packet_sources packet.cpp room_member.cpp)
@@ -488,11 +496,15 @@ if(TARGET network)
 endif()
 if(TARGET core)
     get_target_property(ldn_sources core SOURCES)
-    list(REMOVE_ITEM ldn_sources hle/service/ldn/lan_discovery.cpp internal_network/socket_proxy.cpp internal_network/network.cpp internal_network/network_interface.cpp hle/service/sockets/bsd.cpp)
+    list(REMOVE_ITEM ldn_sources hle/service/ldn/lan_discovery.cpp internal_network/network.cpp internal_network/network_interface.cpp)
+    set(extra "${MULTIPLAYER_OUTPUT}/lan_discovery.cpp" "${MULTIPLAYER_OUTPUT}/socket_network.cpp"
+        "${MULTIPLAYER_OUTPUT}/network_interface.cpp")
+    if(core_hardens_sockets LESS 0)
+        list(REMOVE_ITEM ldn_sources internal_network/socket_proxy.cpp hle/service/sockets/bsd.cpp)
+        list(APPEND extra "${MULTIPLAYER_OUTPUT}/socket_proxy.cpp" "${MULTIPLAYER_OUTPUT}/bsd.cpp")
+    endif()
     set_property(TARGET core PROPERTY SOURCES "${ldn_sources}")
-    target_sources(core PRIVATE "${MULTIPLAYER_OUTPUT}/lan_discovery.cpp"
-        "${MULTIPLAYER_OUTPUT}/socket_proxy.cpp" "${MULTIPLAYER_OUTPUT}/socket_network.cpp"
-        "${MULTIPLAYER_OUTPUT}/network_interface.cpp" "${MULTIPLAYER_OUTPUT}/bsd.cpp")
+    target_sources(core PRIVATE ${extra})
     target_include_directories(core BEFORE PRIVATE "${MULTIPLAYER_SOCKET_HEADERS}" "${MULTIPLAYER_OUTPUT}")
     target_include_directories(core PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
     target_link_libraries(core PRIVATE zstd::zstd)

@@ -1,8 +1,8 @@
 diff --git a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
-index 024ed27ea..7e69c4662 100644
+index 81bd4b9e74..13f8f411a6 100644
 --- a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
 +++ b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
-@@ -1583,7 +1583,10 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+@@ -1601,7 +1601,10 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
                  return fail(index, "native float-to-integer conversion mode");
              }
              const bool is_signed = insn.Bits(72, 1);
@@ -13,4 +13,4 @@ index 024ed27ea..7e69c4662 100644
 +                                                       small && insn.Bits(63, 1))
                         : opcode == 0xd05 ? uniform_register(insn.Bits(32, 8)) : insn.Bits(32, 8);
              if (half) {
-                 extract_half({source, 2, false, false}, 0, 252);
+                 extract_half({source, insn.Bits(60, 1) ? 3U : 2U, false, false}, 0, 252);
