@@ -88,6 +88,48 @@ in the port's performance settings; the game's own values in the Library still w
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock
   reads and emulated TLS); never read final frame rates with it on.
 
+## Where the frame time goes (branch perf/mkw-core-draw-path, 2026-11-03)
+
+The GPU side keeps up with the game: at the title the vi2 present never waits for the GPU
+fence (2 us average over 600 presents), and none of the renderer-side changes moved the
+title's 23-26 FPS band, measured one after another on the same binary:
+
+| Change (all opt-in knobs on this branch unless noted) | Title FPS |
+|---|---|
+| Control | 23-26 |
+| GPU-written command lists skip the front-to-back drain unless marked in the last 4M ring words, dirty or with a writer queued (`EDEN_NX2_LIST_DRAIN=recent`; 96% of 13,000 drains a second skipped, front 1,700 words ahead instead of 57) | 24.6 |
+| Semaphore acquires drain only to the semaphore's queued release (`EDEN_NX2_ACQUIRE_DRAIN_TO_RELEASE=1`) | 23.2 |
+| Two frames in flight at the present (`EDEN_NX2_FRAMES_AHEAD=2`), renderer present thread (`EDEN_PS5_PRESENT_THREAD=1`) | 25.7, 21.3 |
+| Half render resolution, 120 Hz guest vsync (`EDEN_NX2_VSYNC_HZ=120`) | 23.1, 24.8 |
+| Unsafe CPU accuracy, plus unsafe DMA and skipped invalidation | 23.4, 24.2 |
+| Guest idle spin 1 ms instead of 100 us (`idle_spin_us`), kernel spin lock 2048 pauses (`EDEN_PS5_KSPIN`) | 19.0, 19.7 |
+| Guest cores 4-5 and the GPU threads on their own CPUs (`EDEN_PS5_PLACE`) | 25.6, 23.6 |
+| No per-delete walk of the TIC index map, one-word ASTC opacity scan, bounded transcode reclaim (patch 0007 defaults) | within noise; the second shortens the time to device memory exhaustion |
+
+What the guest does instead (development profile build, `EDEN_DEV_PROFILE=ON`, and the
+`EDEN_GUEST_RUN` / `EDEN_GUEST_WAKE` lines of the normal build's 5 s report):
+
+- The game's main thread waits 82% of the time, 3.2 s of every 5 in address arbitration on
+  its own job system: ~77 waits a frame, 350 us each on average. Its six `BaseProcExecutor`
+  threads carry the work (0.26-0.44 of a core each, ~70 us of guest code per run, 5-6k runs a
+  second each) and are themselves idle 56-74%; the main thread runs 0.14 of a core, the
+  loaders and `gear::PrepareThread` little.
+- Host wake-up latency is not the cost: a sleeping guest core resumes 7-9 us after the
+  interrupt that wakes it (worst 70-575 us), 25k idles a second on core 0, a third of them sleeps.
+- The guest cores' time: 53% JIT-compiled game code, 33% idle spin, 10% emulated kernel
+  (3.4% futex syscalls, 2.7% the scheduler spin lock's clock-polling wait), 3.5% memory
+  callbacks. IPC averages a millisecond (storage reads on the loaders); the main thread's own
+  IPC is 13 ms per 5 s.
+
+So the title's frame is the serial chain main thread -> executor jobs -> main thread, with
+the busiest executor's job code (18 ms a frame of JIT'd code at 24 FPS) and the main thread's
+7 ms on its critical path. 40 FPS needs that guest code to run ~1.7x faster: a 64-bit fastmem
+arena on the console (every memory access walks the page table today) and dynarmic code
+quality, not renderer or scheduling work.
+
+Reproduce: `tools/mkw-title/run.py` as above; `fold.py` folds a ps5-perf recording for
+`stacks.py`; the runner relaunches when a crash notice sends the app to the launcher.
+
 ## Reproduce
 
 Build in the usual container (`docs/BUILDING.md`), with `EDEN_PS5_VULKAN=ON` and
