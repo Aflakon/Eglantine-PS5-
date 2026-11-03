@@ -33,6 +33,8 @@ core's split GPU thread stayed off. Profiles of the baseline (ps5-perf, precise 
 | + guest reads with nothing to flush answered on the guest core (`EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1`, as fastmem builds do) | main.cpp default | 19.9 |
 | + the split's front checks the written-page bits before draining the back for a command list | patch 0006 | 21.8-24.2 |
 | + 300 us spin waits before the three sleeps of a read round trip | patch 0006, main.cpp default | within noise |
+| Final defaults (candidate 11): 5 s windows 21-29 FPS, 24.4 average over 48 s, then out of device memory at 139 s | - | 24.4 |
+| + `EDEN_NX2_TC_COSTLY_MIN_AGE=30` | env.txt | 24.7 |
 
 The split GPU thread crashed on the console: the port presented its loading screen from the
 front thread while the back thread composited the guest's frames, both recording into one
@@ -54,11 +56,15 @@ in the port's performance settings; the game's own values in the Library still w
   two candidates (a list read before its writer ran, then a clear with a garbage render
   target), so it is off unless `EDEN_NX2_LIST_DRAIN_TO_WRITER=1`: something the front does not
   count as a writer fills those lists.
-- Memory: the guest's mapped memory grows through the title screen (4.3 -> 4.8 GB in two
+- Memory: the guest's committed memory grows through the title screen (4.3 -> 4.8 GB in two
   minutes) while the texture cache holds ~2-4 GB of host copies and the heap ~1.9 GB in an
   11.1 GB pool; low-accuracy runs end with `VK_ERROR_OUT_OF_DEVICE_MEMORY` after 1.5-3
   minutes. The 20 s memory report now also prints the kernel's count of the guest's mapped
-  memory to tell real growth from sparse-slot commits. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
+  memory: 9.2 GB at the title. The core gives every Switch 2 title its 12 GiB layout
+  ("titles size their heap from the total memory") and the game maps nearly all of it; the
+  sparse backing commits only the pages it writes, which is where the growth comes from.
+  `EDEN_NX2_MEMORY_LAYOUT_GB=6|8|10` runs the title with a smaller layout (its graphics server
+  region stays) to see whether it sizes its heap down and the pool holds. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
   recently used decoded ASTC images out of aggressive collection (fewer re-uploads, less
   headroom).
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock

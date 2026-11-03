@@ -126,6 +126,66 @@ index 952ba0e..7a2b7d4 100644
      void Free(size_t id) {
          auto& item = item_pool[id];
          Detach(item);
+diff --git a/src/core/core.cpp b/src/core/core.cpp
+index 41871df..46ede41 100644
+--- a/src/core/core.cpp
++++ b/src/core/core.cpp
+@@ -323,11 +323,24 @@ struct System::Impl {
+ 
+         // Switch 2 titles size their heap from the total memory and need the 12 GiB layout. Set it
+         // as a per-game value, so RestoreGlobalState brings back the configured layout afterwards.
+-        if (switch2_program &&
+-            Settings::values.memory_layout_mode.GetValue() != Settings::MemoryLayout::Memory_12Gb) {
+-            LOG_INFO(Core, "Switch 2 program: using the 12 GiB memory layout");
++        // EDEN_NX2_MEMORY_LAYOUT_GB=6|8|10 gives a Switch 2 title a smaller layout (its graphics
++        // server region stays): on a console whose shared pool also holds the host's texture
++        // copies, a title that fills whatever it is given runs the pool dry.
++        const auto switch2_layout = [] {
++            const char* value = std::getenv("EDEN_NX2_MEMORY_LAYOUT_GB");
++            const long gb = value != nullptr ? std::strtol(value, nullptr, 10) : 12;
++            return gb <= 6 ? Settings::MemoryLayout::Memory_6Gb
++                 : gb <= 8 ? Settings::MemoryLayout::Memory_8Gb
++                 : gb <= 10 ? Settings::MemoryLayout::Memory_10Gb
++                            : Settings::MemoryLayout::Memory_12Gb;
++        }();
++        if (switch2_program && Settings::values.memory_layout_mode.GetValue() != switch2_layout) {
++            LOG_INFO(Core, "Switch 2 program: using the {} memory layout",
++                     switch2_layout == Settings::MemoryLayout::Memory_12Gb ? "12 GiB"
++                     : switch2_layout == Settings::MemoryLayout::Memory_10Gb ? "10 GiB"
++                     : switch2_layout == Settings::MemoryLayout::Memory_8Gb ? "8 GiB" : "6 GiB");
+             Settings::values.memory_layout_mode.SetGlobal(false);
+-            Settings::values.memory_layout_mode.SetValue(Settings::MemoryLayout::Memory_12Gb);
++            Settings::values.memory_layout_mode.SetValue(switch2_layout);
+         }
+ 
+         // The Switch 2 counter runs at 31.25 MHz and its SDK converts ticks with that constant
+diff --git a/src/core/hle/kernel/board/nintendo/nx/k_system_control.cpp b/src/core/hle/kernel/board/nintendo/nx/k_system_control.cpp
+index ba4737e..81613ad 100644
+--- a/src/core/hle/kernel/board/nintendo/nx/k_system_control.cpp
++++ b/src/core/hle/kernel/board/nintendo/nx/k_system_control.cpp
+@@ -83,16 +83,18 @@ size_t KSystemControl::Init::GetRealMemorySize() {
+ 
+ // Initialization.
+ size_t KSystemControl::Init::GetIntendedMemorySize() {
++    // A Switch 2 program keeps its graphics server region whatever layout it runs with.
++    const size_t graphics_server = Settings::CurrentProgramIsSwitch2() ? KSystemControl::Nx2GraphicsServerMemorySize : 0;
+     switch (GetMemorySizeForInit()) {
+     case Smc::MemorySize_4GB:
+     default: // All invalid modes should go to 4GB.
+-        return 4_GiB;
++        return 4_GiB + graphics_server;
+     case Smc::MemorySize_6GB:
+-        return 6_GiB;
++        return 6_GiB + graphics_server;
+     case Smc::MemorySize_8GB:
+-        return 8_GiB;
++        return 8_GiB + graphics_server;
+     case Smc::MemorySize_10GB:
+-        return 10_GiB;
++        return 10_GiB + graphics_server;
+     case Smc::MemorySize_12GB:
+         return 12_GiB + KSystemControl::Nx2GraphicsServerMemorySize;
+     }
 diff --git a/src/core/memory.cpp b/src/core/memory.cpp
 index 91c5bf8..ce2cc17 100644
 --- a/src/core/memory.cpp
