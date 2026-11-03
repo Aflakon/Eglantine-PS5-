@@ -67,7 +67,9 @@ in the port's performance settings; the game's own values in the Library still w
   region stays): with 8 and with 6 GiB the game faulted at a null pointer during its boot (it
   never mapped memory), so its heap sizing needs the 12 GiB layout as the core says. Fitting
   the title screen in the pool needs smaller host copies (fewer, smaller or shared textures),
-  not a smaller guest. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
+  not a smaller guest. 16 MiB VMA blocks (`EDEN_PS5_VMA_BLOCK_MIB=16`, 19.5 FPS, out of
+  memory at 168 s) and the transient image pools (`EDEN_PS5_TRANSIENT_POOLS=1`, 23.2 FPS, out
+  of memory at 155 s) changed neither the frame rate nor the time to exhaustion. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
   recently used decoded ASTC images out of aggressive collection (fewer re-uploads, less
   headroom).
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock
