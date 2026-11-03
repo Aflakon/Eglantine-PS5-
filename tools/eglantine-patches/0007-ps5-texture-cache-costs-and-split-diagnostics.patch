@@ -1,21 +1,24 @@
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
-index e600647..c6906ee 100644
+index e600647..3ed6463 100644
 --- a/src/video_core/dma_pusher.cpp
 +++ b/src/video_core/dma_pusher.cpp
-@@ -911,13 +911,63 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
+@@ -911,13 +911,68 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
      if (!Tegra::g_nx2_ampere.load(std::memory_order_relaxed) || size == 0) {
          return;
      }
-+    // What a list on a GPU-written page waits for (logged per 2,000 such lists): whether the back
-+    // still had work queued, how much, whether a page of the list was marked by work the back
-+    // ran during the wait (the wait was needed), and whether the list was dirty in the caches.
-+    // EDEN_NX2_LIST_DRAIN=stamp skips the wait when no page's last mark is past what the back had
-+    // finished (a writer still queued is missed: experiment); =0 never waits (experiment).
++    // A list on a GPU-written page waited for the back before every read: at Mario Kart World's
++    // title that was 13,000 waits a second with the back about 57 words behind (the two threads
++    // ran in lockstep), and in 240,000 waits no page of a list was ever marked by work the back
++    // ran during the wait. The wait stays where it does something: the list is dirty in the
++    // caches (its flush reads back through the back's scheduler, which the back must not be
++    // using) or a page's last mark is past what the back had finished. Logged per 2,000 lists.
++    // EDEN_NX2_LIST_DRAIN=1 restores the wait before every such list; =0 never waits
++    // (experiment: the flush then races the back).
 +    static const int list_drain = [] {
 +        const char* value = std::getenv("EDEN_NX2_LIST_DRAIN");
-+        if (value == nullptr) return 1;
++        if (value == nullptr) return 2;
 +        if (value[0] == '0') return 0;
-+        return value[0] == 's' ? 2 : 1;
++        return value[0] == '1' ? 1 : 2;
 +    }();
 +    struct ListStats {
 +        u64 lists{}, waited{}, words{}, needed{}, writer_ahead{}, dirty{}, skipped{};
@@ -47,7 +50,9 @@ index e600647..c6906ee 100644
 +                if (split.LastWriterPosition() > consumed) ++stats.writer_ahead;
 +            }
 +            const bool stamped = pages_marked_after(consumed);
-+            if (list_drain == 1 || (list_drain == 2 && stamped)) {
++            const bool dirty = list_drain == 2 && !stamped &&
++                memory_manager.IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache);
++            if (list_drain == 1 || (list_drain == 2 && (stamped || dirty))) {
 +                split.DrainToLastWriter();
 +            } else {
 +                ++stats.skipped;
