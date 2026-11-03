@@ -1,3 +1,57 @@
+diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
+index 4586f9a..5a2ca29 100644
+--- a/src/core/hle/service/nx2_gsv.h
++++ b/src/core/hle/service/nx2_gsv.h
+@@ -8,6 +8,7 @@
+ #include <array>
+ #include <thread>
+ #include <chrono>
++#include <deque>
+ #include <condition_variable>
+ #include <cstring>
+ #include <set>
+@@ -1305,18 +1306,22 @@ private:
+         // while the GPU thread runs frame N (the console keeps several frames in flight). Waiting
+         // for this frame serialized the two: 8-56 ms of every 34-105 ms frame on title 1.
+         // EDEN_NX2_FRAMES_AHEAD=0 restores the wait for the current frame.
+-        static const bool frames_ahead = [] {
++        // EDEN_NX2_FRAMES_AHEAD=N (1): the present waits for the fence of the frame N presents
++        // back, so the game keeps N frames in flight (its swapchain has three images).
++        static const size_t frames_ahead = [] {
+             const char* value = std::getenv("EDEN_NX2_FRAMES_AHEAD");
+-            return value == nullptr || value[0] != '0';
++            return value != nullptr ? static_cast<size_t>(std::strtoul(value, nullptr, 10)) : size_t{1};
+         }();
+         const auto entered = std::chrono::steady_clock::now();
+-        if (frames_ahead) {
+-            LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x}); now {:#x}",
+-                      m_presents, ~w[22], w[24], m_previous_fence_id, m_previous_fence_value,
+-                      ~w[22] < 192 ? system.Host1x().GetSyncpointManager().GetGuestSyncpointValue(~w[22]) : 0U);
+-            WaitForFrame(m_previous_fence_id, m_previous_fence_value);
+-            m_previous_fence_id = ~w[22];
+-            m_previous_fence_value = w[24];
++        if (frames_ahead != 0) {
++            m_pending_frame_fences.emplace_back(~w[22], w[24]);
++            while (m_pending_frame_fences.size() > frames_ahead) {
++                const auto [fence_id, fence_value] = m_pending_frame_fences.front();
++                m_pending_frame_fences.pop_front();
++                LOG_DEBUG(Service, "nx2:vi2 present #{} fence ({}, {:#x}), waiting for ({}, {:#x})",
++                          m_presents, ~w[22], w[24], fence_id, fence_value);
++                WaitForFrame(fence_id, fence_value);
++            }
+         } else {
+             WaitForFrame(~w[22], w[24]);
+         }
+@@ -1372,8 +1377,7 @@ private:
+         u32 presents{};
+         std::chrono::steady_clock::time_point last_present{};
+     } m_stats{};
+-    u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
+-    u32 m_previous_fence_value{};
++    std::deque<std::pair<u32, u32>> m_pending_frame_fences; // (fence id, value) of presents not waited for
+ 
+     // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
+     // present faster than that. Every slot is reported free here: hold each present until the
 diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
 index e600647..5508203 100644
 --- a/src/video_core/dma_pusher.cpp
@@ -86,10 +140,73 @@ index e600647..5508203 100644
              }
          });
 diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
-index aa3e3d6..99bdc08 100644
+index aa3e3d6..43de8bc 100644
 --- a/src/video_core/engines/puller.cpp
 +++ b/src/video_core/engines/puller.cpp
-@@ -262,14 +262,36 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+@@ -6,6 +6,7 @@
+ 
+ #include <atomic>
+ #include <cstdlib>
++#include <unordered_map>
+ 
+ #include "common/assert.h"
+ #include "common/logging.h"
+@@ -72,6 +73,37 @@ void DrainBack() {
+     VideoCommon::GpuSplit::Get().Drain();
+ }
+ 
++// Where the last release of each semaphore word was queued for the back (every channel's puller
++// runs on the front, so one table without a lock). An acquire whose word is not met yet waits
++// for the back only up to that release instead of everything queued: at Mario Kart World's
++// title 63% of acquires waited for a queued release (28% of the front thread's wall time).
++// EDEN_NX2_ACQUIRE_DRAIN_TO_RELEASE=0 waits for everything queued, as before.
++std::unordered_map<GPUVAddr, u64> g_release_positions;
++
++void NoteRelease(GPUVAddr address) {
++    if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
++        g_release_positions[address & ~GPUVAddr{3}] = split.WritePosition();
++    }
++}
++
++void DrainBackToRelease(GPUVAddr address) {
++    static const bool to_release = [] {
++        const char* value = std::getenv("EDEN_NX2_ACQUIRE_DRAIN_TO_RELEASE");
++        return value == nullptr || value[0] != '0';
++    }();
++    auto& split = VideoCommon::GpuSplit::Get();
++    if (!to_release || !split.Active()) {
++        DrainBack();
++        return;
++    }
++    const auto it = g_release_positions.find(address & ~GPUVAddr{3});
++    if (it == g_release_positions.end()) {
++        DrainBack();
++        return;
++    }
++    split.DrainTo(it->second);
++}
++
+ } // Anonymous namespace
+ 
+ bool Puller::PendingAcquire::Matches(u32 current) const {
+@@ -97,7 +129,7 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
+         pending_acquire->Matches(dma_pusher.memory_manager.Read<u32>(pending_acquire->address))) {
+         return true;
+     }
+-    DrainBack();
++    DrainBackToRelease(pending_acquire->address);
+     const u32 current = ReadSemaphoreWord(dma_pusher, pending_acquire->address);
+     if (Nx2SemaphoreWaiters::Get().Latched(this)) {
+         if (static std::atomic<u32> rescued{};
+@@ -245,6 +277,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
+         OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, properties, payload] {
+             rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload, properties, payload, 0);
+         });
++        NoteRelease(sequence_address);
+     } else if (g_nx2_ampere) {
+         // Switch 2 waits on semaphores the CPU (or another channel) releases, e.g. once it has
+         // written the commands this channel runs next: suspend the channel until the value is
+@@ -262,14 +295,36 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
              return;
          }
          VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
@@ -105,13 +222,14 @@ index aa3e3d6..99bdc08 100644
 +            ++acquire_stats.raw;
              return;
          }
+-        DrainBack();
 +        {
 +            auto& split = VideoCommon::GpuSplit::Get();
 +            if (split.Active() && split.ConsumedPosition() < split.WritePosition()) {
 +                ++acquire_stats.drained_waits;
 +            }
 +        }
-         DrainBack();
++        DrainBackToRelease(acquire.address);
 +        if (acquire_stats.checks % 4000 == 0) {
 +            LOG_INFO(HW_GPU, "Semaphore acquires: {} checked, {} met by the guest word, {} waited for "
 +                     "the back, {} met after it, {} left pending for the GPU",
@@ -126,11 +244,39 @@ index aa3e3d6..99bdc08 100644
          // The clock is only for the delayed-wait warning. Already-satisfied
          // acquires must not pay for a host clock query on every GPU command.
          acquire.since = std::chrono::steady_clock::now();
+@@ -342,6 +397,7 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
+         rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload,
+                           VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
+     });
++    NoteRelease(sequence_address);
+ }
+ 
+ void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {
+@@ -371,6 +427,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
+             rasterizer->Query(address, VideoCommon::QueryType::Payload,
+                               VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
+         });
++        NoteRelease(address);
+         return;
+     }
+     // Acquires: check once after flushing pending fences; never block the GPU thread on them.
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
-index 5b5f5a3..982f2f9 100644
+index 5b5f5a3..cbc8853 100644
 --- a/src/video_core/gpu_split.cpp
 +++ b/src/video_core/gpu_split.cpp
-@@ -378,6 +378,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
+@@ -229,7 +229,10 @@ void GpuSplit::DrainToLastWriter() {
+         Drain();
+         return;
+     }
+-    const u64 position = last_writer_position;
++    DrainTo(last_writer_position);
++}
++
++void GpuSplit::DrainTo(u64 position) {
+     consumed_cache = consumed.load(std::memory_order_acquire);
+     if (consumed_cache >= position) {
+         return;
+@@ -378,6 +381,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
          g_back_busy.store(true, std::memory_order_relaxed);
          while (read_position != available) {
              const size_t index = read_position & RingMask;
@@ -139,13 +285,15 @@ index 5b5f5a3..982f2f9 100644
              read_position += size != 0 ? size : RingWords - index;
              // Hand ring space back now and then while working through a long batch.
 diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
-index bc3742f..f5d6ba9 100644
+index bc3742f..e7d050c 100644
 --- a/src/video_core/gpu_split.h
 +++ b/src/video_core/gpu_split.h
-@@ -110,6 +110,11 @@ public:
+@@ -110,6 +110,13 @@ public:
      }
      /// Waits until the back executed the last entry that could have written guest memory.
      void DrainToLastWriter();
++    /// Waits until the back executed everything sent before ring position `position`.
++    void DrainTo(u64 position);
 +    /// Ring positions (words sent, words the back finished, the last noted writer): what a
 +    /// command list on a GPU-written page would wait for (dma_pusher.cpp diagnostics).
 +    [[nodiscard]] u64 WritePosition() const { return write_position; }

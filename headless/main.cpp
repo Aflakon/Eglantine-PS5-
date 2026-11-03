@@ -812,6 +812,13 @@ int main(int argc, char** argv) {
         // A32 fastmem window (direct JIT accesses to aliased guest memory): opt-in with dev-settings
         // fastmem=on; on the console it is slower than the page-table path.
         Eden::Fastmem::Request(false);
+        // EDEN_PS5_PRESENT_THREAD=1 (experiment): the renderer copies to the swapchain and presents
+        // on its own thread instead of the GPU thread, which otherwise waits for the Vulkan worker
+        // at every present.
+        if (const char* present_thread = std::getenv("EDEN_PS5_PRESENT_THREAD");
+            present_thread != nullptr && present_thread[0] == '1') {
+            Settings::values.async_presentation = backend == Eden::GraphicsBackend::Vulkan;
+        }
 #ifdef EDEN_DEV_VULKAN
         Settings::values.async_presentation = backend == Eden::GraphicsBackend::Vulkan;
         // Exercise upstream's checked initialization error, never an invalid pointer.
