@@ -71,7 +71,14 @@ in the port's performance settings; the game's own values in the Library still w
   memory at 168 s) and the transient image pools (`EDEN_PS5_TRANSIENT_POOLS=1`, 23.2 FPS, out
   of memory at 155 s) changed neither the frame rate nor the time to exhaustion.
 - Compiling the emulator for the console's Zen 2 (`EDEN_CPU_PRESET=zen2`, `-march=znver2`;
-  the default is generic x86-64) measured 19.8 and 22.6 FPS: no gain over the generic build. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
+  the default is generic x86-64) measured 19.8 and 22.6 FPS: no gain over the generic build.
+- A function-level profile of the back thread at 22 FPS: 39% the draw path (pipeline
+  configure 26%, image views 10%, stage buffers 5%), 15% compute dispatch and its QMD
+  signals, 16% texture churn (deleting 7%, creating 5%, re-uploading 4%), 11% mutex locks
+  (the Vulkan worker's poll retaking the queue mutex, invalidations under inline uploads), 15%
+  idle. The worker poll now reads an atomic count and the published semaphore store uses a
+  spin lock (candidate 15: 21.8 and 20.8 FPS, within the 20-25 FPS run-to-run band). What is
+  left in the draw path and the churn is core work beyond a settings or synchronization fix. `EDEN_NX2_TC_COSTLY_MIN_AGE` keeps
   recently used decoded ASTC images out of aggressive collection (fewer re-uploads, less
   headroom).
 - The core's `EDEN_NX2_GPU_PROFILE` costs ~25% of the GPU thread's CPU on the console (clock
