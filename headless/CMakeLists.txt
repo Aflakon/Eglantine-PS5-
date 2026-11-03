@@ -832,7 +832,15 @@ string(REPLACE "${idle_old}" [=[void PhysicalCore::Idle() {
     {
         std::unique_lock lk{m_guard};
         slept = !m_is_interrupted;
+        m_interrupt_ns.store(0, std::memory_order_relaxed);
+        m_sleeping.store(true, std::memory_order_relaxed);
         m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
+        m_sleeping.store(false, std::memory_order_relaxed);
+    }
+    if (const long long sent = m_interrupt_ns.load(std::memory_order_relaxed); slept && sent != 0) {
+        const long long woke = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()).count();
+        ::Eden::Performance::CountWake(m_core_index, woke - sent);
     }
     ::Eden::Performance::CountIdle(m_core_index, ::Eden::Performance::NowNs() - start, slept);
 }

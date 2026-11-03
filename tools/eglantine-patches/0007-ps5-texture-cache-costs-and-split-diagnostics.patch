@@ -28,6 +28,36 @@ index 107d6f1..9a51c64 100644
          Pause();
          if (m_state.load(std::memory_order_relaxed) == 0) {
              expected = 0;
+diff --git a/src/core/hle/kernel/physical_core.cpp b/src/core/hle/kernel/physical_core.cpp
+index c3ae762..0591784 100644
+--- a/src/core/hle/kernel/physical_core.cpp
++++ b/src/core/hle/kernel/physical_core.cpp
+@@ -257,6 +257,11 @@ void PhysicalCore::Interrupt() {
+ 
+     // Add interrupt flag.
+     m_is_interrupted = true;
++    if (m_sleeping.load(std::memory_order_relaxed)) {
++        m_interrupt_ns.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                 std::chrono::steady_clock::now().time_since_epoch()).count(),
++                             std::memory_order_relaxed);
++    }
+ 
+     // Interrupt ourselves.
+     m_on_interrupt.notify_one();
+diff --git a/src/core/hle/kernel/physical_core.h b/src/core/hle/kernel/physical_core.h
+index 20371d6..523955f 100644
+--- a/src/core/hle/kernel/physical_core.h
++++ b/src/core/hle/kernel/physical_core.h
+@@ -73,6 +73,9 @@ private:
+     Core::ArmInterface* m_arm_interface{};
+     KThread* m_current_thread{};
+     std::atomic<bool> m_is_interrupted{};
++    // Wake-up latency diagnostics: the time Interrupt() set the flag while this core slept (0 if none).
++    std::atomic<long long> m_interrupt_ns{0};
++    std::atomic<bool> m_sleeping{false};
+     bool m_is_single_core{};
+ };
+ 
 diff --git a/src/core/hle/service/nx2_gsv.h b/src/core/hle/service/nx2_gsv.h
 index 4586f9a..5a2ca29 100644
 --- a/src/core/hle/service/nx2_gsv.h
