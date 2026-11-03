@@ -1,16 +1,54 @@
 diff --git a/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp b/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
-index 848c15d6f8..1a97666458 100644
+index 848c15d..90fbfdf 100644
 --- a/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
 +++ b/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
-@@ -445,7 +445,10 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
+@@ -6,6 +6,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <cstdlib>
++#include <algorithm>
+ #include <cstring>
+ #include <vector>
+ #include "common/assert.h"
+@@ -445,6 +446,9 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
              const char* value = std::getenv("EDEN_NX2_PB_SNAPSHOT");
              return value == nullptr || value[0] != '0';
          }();
--        if (snapshot && channel_state->memory_manager) {
-+        // Bananza's startup command snapshots can contain only zeroes. Fetch its streams at
-+        // execution so queue initialization and semaphore releases are not lost.
-+        const bool snapshot_title = system.GetApplicationProcessProgramID() != 0x040074a01bf12000ULL;
-+        if (snapshot && snapshot_title && channel_state->memory_manager) {
++        // Bananza can submit empty startup streams before they are populated. Defer those
++        // entries, but preserve populated words before the guest reuses the command memory.
++        const bool defer_empty = system.GetApplicationProcessProgramID() == 0x040074a01bf12000ULL;
+         if (snapshot && channel_state->memory_manager) {
              size_t words = 0;
              for (const auto& entry : entries.command_lists) {
-                 words += entry.size;
+@@ -454,9 +458,15 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
+             entries.submitted_offsets.reserve(entries.command_lists.size());
+             size_t offset = 0;
+             for (const auto& entry : entries.command_lists) {
+-                entries.submitted_offsets.push_back(static_cast<u32>(offset));
+                 channel_state->memory_manager->ReadBlockUnsafe(
+                     entry.addr, entries.submitted_words.data() + offset, entry.size * sizeof(u32));
++                const auto first = entries.submitted_words.begin() + offset;
++                const bool empty = defer_empty && std::all_of(
++                    first, first + entry.size, [](const Tegra::CommandHeader& word) {
++                        return word.argument == 0;
++                    });
++                // An out-of-range offset selects the DMA pusher's live-fetch path.
++                entries.submitted_offsets.push_back(empty ? ~u32{} : static_cast<u32>(offset));
+                 offset += entry.size;
+             }
+         }
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index ad5a169..006e872 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -172,7 +172,9 @@ bool DmaPusher::Step() {
+         // Resume and GPU-written entries need live words, even after a flush cleared dirty state.
+         const bool submitted = VideoCommon::CanUseSubmittedCommands(
+             command_resume_offset != 0,
+-            dma_pushbuffer_subindex < command_list.submitted_offsets.size(), gpu_written,
++            dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
++                command_list.submitted_offsets[dma_pushbuffer_subindex] < command_list.submitted_words.size(),
++            gpu_written,
+             use_safe && memory_manager.IsMemoryDirty(dma_state.dma_get,
+                                                      header.size * sizeof(u32)));
+         if (submitted) {

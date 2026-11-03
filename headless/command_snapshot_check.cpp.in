@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <map>
+#include <vector>
+#include "video_core/command_fetch_order.h"
+using u32=uint32_t; using u64=uint64_t;
+namespace Tegra { struct CommandHeader {u32 argument;}; }
+struct Entry {u64 addr;u32 size;};
+struct List {std::vector<Entry> command_lists;std::vector<Tegra::CommandHeader> submitted_words;std::vector<u32> submitted_offsets;};
+struct Memory {std::map<u64,std::vector<u32>> backing;bool dirty{};
+ void ReadBlockUnsafe(u64 address,Tegra::CommandHeader* output,size_t size) {
+  const auto& words=backing.at(address);assert(size<=words.size()*sizeof(u32));
+  if(size)std::memcpy(output,words.data(),size);
+ }
+ bool IsMemoryDirty(u64,size_t){return dirty;}
+};
+struct Channel {Memory* memory_manager;};
+void Build(List& entries,Channel* channel_state,u64 program_id) {
+ struct System {u64 id;u64 GetApplicationProcessProgramID(){return id;}} system{program_id};
+ const bool defer_empty = @SNAPSHOT_POLICY@;
+@SNAPSHOT_BODY@
+}
+bool Eligible(List& command_list,size_t dma_pushbuffer_subindex,bool gpu_written,bool resumed,bool use_safe,bool dirty) {
+ const size_t command_resume_offset=resumed?1:0;Memory memory_manager;memory_manager.dirty=dirty;
+ struct {u64 dma_get{};}dma_state;const auto header=command_list.command_lists.at(dma_pushbuffer_subindex);
+ return @SNAPSHOT_SELECTION@;
+}
+int main(){
+ Memory memory;memory.backing={{0x1000,{0,0,0,0}},{0x2000,{0x20010285,0x3f800000}},{0x3000,{0,1,0}}};Channel channel{&memory};
+ List list;list.command_lists={{0x1000,4},{0x2000,2},{0x3000,3}};Build(list,&channel,0x040074a01bf12000ULL);
+ assert(list.submitted_offsets==std::vector<u32>({~u32{},4,6}));
+ assert(!Eligible(list,0,false,false,false,false));assert(Eligible(list,1,false,false,false,false));assert(Eligible(list,2,false,false,false,false));
+ memory.backing[0x2000]={0x3f000000,0x20010285};memory.backing[0x1000]={0x2001001c,7,0,0};
+ assert(list.submitted_words[4].argument==0x20010285);assert(list.submitted_words[5].argument==0x3f800000);
+ assert(memory.backing[0x1000][0]==0x2001001c); // Live fallback can observe producer's later stream.
+ assert(!Eligible(list,1,true,false,false,false));assert(!Eligible(list,1,false,true,false,false));assert(!Eligible(list,1,false,false,true,true));
+ List ordinary;ordinary.command_lists={{0x3000,3},{0x1000,4}};memory.backing[0x1000]={0,0,0,0};Build(ordinary,&channel,0x0100000000001000ULL);
+ assert(ordinary.submitted_offsets==std::vector<u32>({0,3}));assert(Eligible(ordinary,1,false,false,false,false));
+ List empty;Build(empty,&channel,0x040074a01bf12000ULL);assert(empty.submitted_words.empty()&&empty.submitted_offsets.empty());
+}
