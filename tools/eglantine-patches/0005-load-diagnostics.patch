@@ -1,0 +1,92 @@
+diff --git a/src/core/file_sys/nup_container.cpp b/src/core/file_sys/nup_container.cpp
+index 0e485b4..702b071 100644
+--- a/src/core/file_sys/nup_container.cpp
++++ b/src/core/file_sys/nup_container.cpp
+@@ -194,6 +194,8 @@ public:
+         // Miss: decompress without holding the lock, then publish and copy.
+         std::vector<u8> scratch = Decompress();
+         if (scratch.empty()) {
++            LOG_ERROR(Loader, "NUP read of {} failed: no data (offset {}, length {}, size {})", name, offset,
++                      length, uncompressed_size);
+             return 0;
+         }
+         {
+@@ -222,18 +224,23 @@ public:
+ private:
+     std::vector<u8> Decompress() const {
+         if (extent_size > backing->GetSize() || extent_offset > backing->GetSize() - extent_size) {
++            LOG_ERROR(Loader, "NUP {}: extent {}+{} is outside the archive ({} bytes)", name, extent_offset,
++                      extent_size, backing->GetSize());
+             return {};
+         }
+         const auto compressed = backing->ReadBytes(static_cast<std::size_t>(extent_size),
+                                                    static_cast<std::size_t>(extent_offset));
+         if (compressed.size() != extent_size) {
++            LOG_ERROR(Loader, "NUP {}: read {} of {} compressed bytes at {}", name, compressed.size(),
++                      extent_size, extent_offset);
+             return {};
+         }
+         std::vector<u8> out(static_cast<std::size_t>(uncompressed_size));
+         const std::size_t result =
+             ZSTD_decompress(out.data(), out.size(), compressed.data(), compressed.size());
+         if (ZSTD_isError(result) || result != out.size()) {
+-            LOG_ERROR(Loader, "NUP zstd decompression failed for {}", name);
++            LOG_ERROR(Loader, "NUP zstd decompression failed for {}: {} (got {}, wanted {})", name,
++                      ZSTD_isError(result) ? ZSTD_getErrorName(result) : "size mismatch", result, out.size());
+             return {};
+         }
+         return out;
+diff --git a/src/core/loader/deconstructed_rom_directory.cpp b/src/core/loader/deconstructed_rom_directory.cpp
+index 4b1168a..d6d2d63 100644
+--- a/src/core/loader/deconstructed_rom_directory.cpp
++++ b/src/core/loader/deconstructed_rom_directory.cpp
+@@ -387,6 +387,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
+             process, system, *module_file, code_size, should_pass_arguments, false, {},
+             patch_ctx.GetPatchers(), patch_ctx.GetLastIndex());
+         if (!tentative_next_load_addr) {
++            LOG_ERROR(Loader, "Layout pass: module {} failed to load", module);
+             return {ResultStatus::ErrorLoadingNSO, {}};
+         }
+ 
+@@ -435,6 +436,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
+             process, system, *module_file, load_addr, should_pass_arguments, true, pm,
+             patch_ctx.GetPatchers(), patch_ctx.GetIndex(i));
+         if (!tentative_next_load_addr) {
++            LOG_ERROR(Loader, "Load pass: module {} failed to load", module);
+             return {ResultStatus::ErrorLoadingNSO, {}};
+         }
+ 
+diff --git a/src/core/loader/nso.cpp b/src/core/loader/nso.cpp
+index 7e3b9a5..9418f37 100644
+--- a/src/core/loader/nso.cpp
++++ b/src/core/loader/nso.cpp
+@@ -69,15 +69,25 @@ FileType AppLoader_NSO::IdentifyType(const FileSys::VirtualFile& in_file) {
+ }
+ 
+ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, VAddr load_base, bool should_pass_arguments, bool load_into_process, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index) {
+-    if (nso_file.GetSize() < sizeof(NSOHeader))
++    if (nso_file.GetSize() < sizeof(NSOHeader)) {
++        LOG_ERROR(Loader, "NSO {}: file too small ({} bytes, load_into_process={})", nso_file.GetName(),
++                  nso_file.GetSize(), load_into_process);
+         return std::nullopt;
++    }
+     NSOHeader nso_header{};
+-    if (sizeof(NSOHeader) != nso_file.ReadObject(&nso_header))
++    if (const auto header_read = nso_file.ReadObject(&nso_header); sizeof(NSOHeader) != header_read) {
++        LOG_ERROR(Loader, "NSO {}: header read returned {} of {} bytes (size {}, load_into_process={})",
++                  nso_file.GetName(), header_read, sizeof(NSOHeader), nso_file.GetSize(), load_into_process);
+         return std::nullopt;
+-    if (nso_header.magic != Common::MakeMagic('N', 'S', 'O', '0'))
++    }
++    if (nso_header.magic != Common::MakeMagic('N', 'S', 'O', '0')) {
++        LOG_ERROR(Loader, "NSO {}: bad magic {:#010x}", nso_file.GetName(), u32(nso_header.magic));
+         return std::nullopt;
+-    if (nso_header.segments.empty())
++    }
++    if (nso_header.segments.empty()) {
++        LOG_ERROR(Loader, "NSO {}: no segments", nso_file.GetName());
+         return std::nullopt;
++    }
+ 
+     // Allocate some space at the beginning if we are patching in PreText mode.
+     const size_t module_start = [&]() -> size_t {
