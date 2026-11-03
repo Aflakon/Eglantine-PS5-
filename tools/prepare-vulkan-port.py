@@ -1303,13 +1303,36 @@ probes = {
         # wait is safe (unlike a wait inside an arbitrary staging-buffer allocation).
         ('        .image = memory_allocator.CreateImage(VkImageCreateInfo{\n            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,',
          '        .image = memory_allocator.CreateTemporaryImage(VkImageCreateInfo{\n            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,'),
+        # A full GPU wait per texture was 5% of the split's back thread at Mario Kart World's
+        # title (one streamed texture a frame, the pool always short): the decode images are now
+        # reclaimed once the ones in flight exceed EDEN_PS5_TRANSCODE_PENDING_MIB (64), waiting
+        # for the oldest only. EDEN_PS5_TRANSCODE_FINISH=1 restores the wait after each.
         ('    pending_transcodes.push_back(std::move(pending));\n',
          '    pending_transcodes.push_back(std::move(pending));\n'
          '    const auto memory_short = ::Eden::Performance::graphics_memory_probe.load(std::memory_order_relaxed);\n'
          '    if (memory_short && memory_short()) {\n'
+         '        static const bool finish_each = [] {\n'
+         '            const char* value = std::getenv("EDEN_PS5_TRANSCODE_FINISH");\n'
+         '            return value != nullptr && value[0] == \'1\';\n'
+         '        }();\n'
+         '        static const u64 pending_limit = [] {\n'
+         '            const char* value = std::getenv("EDEN_PS5_TRANSCODE_PENDING_MIB");\n'
+         '            return (value != nullptr ? std::strtoull(value, nullptr, 10) : u64{64}) << 20;\n'
+         '        }();\n'
          '        ::Eden::Performance::Timer finish_timer(::Eden::Performance::mkw_transcode_finish);\n'
-         '        scheduler.Finish();\n'
+         '        if (finish_each) {\n'
+         '            scheduler.Finish();\n'
+         '        }\n'
          '        while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {\n'
+         '            pending_transcodes.pop_front();\n'
+         '        }\n'
+         '        u64 pending_bytes = 0;\n'
+         '        for (const auto& entry : pending_transcodes) {\n'
+         '            pending_bytes += entry.bytes;\n'
+         '        }\n'
+         '        while (pending_bytes > pending_limit && pending_transcodes.size() > 1) {\n'
+         '            scheduler.Wait(pending_transcodes.front().tick);\n'
+         '            pending_bytes -= pending_transcodes.front().bytes;\n'
          '            pending_transcodes.pop_front();\n'
          '        }\n'
          '        staging_buffer_pool.ReleaseCompleted();\n'
