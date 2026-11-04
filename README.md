@@ -38,9 +38,10 @@ Current core pin: **Eglantine `05e3b9d`** (`nx2`, 2026-11-03).
 | Item | State |
 |---|---|
 | Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and plays on the build with core `0da830e`: **Docked, 1x resolution, about 20 fps**. The build with core `05e3b9d` (the current one) is **not yet tested on a console**; the first release notes will say when it is. |
+| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and plays on the current build (core `05e3b9d`). Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. |
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
-| DLC inside a NUP | Not mounted yet (the core logs `AoC mounting is not supported yet`). The base game and its update load. |
+| Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
+| Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
 | Other Switch 2 titles | Some fail early. Nothing is promised beyond what is listed here. |
 | Frame generation (Lossless Scaling) | Compiled in, but pointless at a 20 fps base. |
 
@@ -79,6 +80,7 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0008 | `nx2:vi2` command 201 stub (Switch 2) |
 | 0009 | Guest-thread watchdog written to `eden_log.txt` (diagnosis of hangs) |
 | 0010 | Do not load/save the global Vulkan static pipeline cache |
+| 0011 | The DLC inside a NUP reaches the game through a content provider (`aoc:u`, data storage by ID) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
@@ -117,9 +119,10 @@ Core actual: **Eglantine `05e3b9d`** (`nx2`, 3-nov-2026).
 | Punto | Estado |
 |---|---|
 | Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y se juega con la build del core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. La build con el core `05e3b9d` (la actual) **aún no está probada en consola**; las notas de la primera release dirán cuándo lo esté. |
+| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y se juega con la build actual (core `05e3b9d`). Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. |
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
-| DLC dentro de un NUP | Todavía no se monta (el core registra `AoC mounting is not supported yet`). El juego base y su update sí cargan. |
+| Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
+| NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
 | Otros juegos de Switch 2 | Algunos fallan pronto. No prometemos nada más allá de lo que aparece aquí. |
 | Generación de fotogramas (Lossless Scaling) | Incluida, pero sin sentido con una base de 20 fps. |
 
