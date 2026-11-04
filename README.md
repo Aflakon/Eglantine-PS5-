@@ -38,9 +38,9 @@ Current core pin: **Eglantine `d9558f0`** (`nx2`, 2026-11-04).
 | Item | State |
 |---|---|
 | Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and plays on core `05e3b9d`. Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. The current build (core `d9558f0`) compiles but has **not been run on a console yet**. |
+| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and runs on the current build (core `d9558f0`), with its update and DLC. Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. |
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
-| Update and DLC inside a NUP | Both load, and the Library shows them. Checked on core `05e3b9d` with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
+| Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
 | Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
 | Other Switch 2 titles | Some fail early. Nothing is promised beyond what is listed here. |
 | Frame generation (Lossless Scaling) | Compiled in, but pointless at a 20 fps base. |
@@ -83,6 +83,7 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0009 | Guest-thread watchdog written to `eden_log.txt` (diagnosis of hangs) |
 | 0010 | Do not load/save the global Vulkan static pipeline cache |
 | 0011 | The DLC inside a NUP reaches the game through a content provider (`aoc:u`, data storage by ID) |
+| 0012 | Donkey Kong Bananza: command lists that are empty when submitted are read when parsed |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
@@ -121,9 +122,9 @@ Core actual: **Eglantine `d9558f0`** (`nx2`, 4-nov-2026).
 | Punto | Estado |
 |---|---|
 | Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y se juega con el core `05e3b9d`. Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. La build actual (core `d9558f0`) compila, pero **aún no se ha ejecutado en consola**. |
+| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y funciona con la build actual (core `d9558f0`), con su update y su DLC. Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. |
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
-| Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con el core `05e3b9d` y Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
+| Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
 | NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
 | Otros juegos de Switch 2 | Algunos fallan pronto. No prometemos nada más allá de lo que aparece aquí. |
 | Generación de fotogramas (Lossless Scaling) | Incluida, pero sin sentido con una base de 20 fps. |
