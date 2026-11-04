@@ -83,6 +83,7 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0009 | Guest-thread watchdog written to `eden_log.txt` (diagnosis of hangs) |
 | 0010 | Do not load/save the global Vulkan static pipeline cache |
 | 0011 | The DLC inside a NUP reaches the game through a content provider (`aoc:u`, data storage by ID) |
+| 0012 | Donkey Kong Bananza: command lists that are empty when submitted are read when parsed |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
