@@ -16,6 +16,14 @@ def adapt(relative, destination, replacements):
             if marker in text:
                 old = old.replace('// update engine as channel may be different.', marker)
                 new = new.replace('// update engine as channel may be different.', marker)
+        if relative.endswith('/vk_rasterizer.cpp') and old.startswith('    pipeline->SetEngine(maxwell3d, gpu_memory);') and old not in text:
+            engine = '    pipeline->SetEngine(maxwell3d, gpu_memory);\n'
+            configure = '    if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->Configure(is_indexed)) {'
+            begin = text.index(engine) + len(engine)
+            end = text.index(configure, begin)
+            repack = text[begin:end]
+            old = old.replace(engine, engine + repack)
+            new = new.replace(configure, repack + configure)
         if relative.endswith('/vulkan_memory_allocator.cpp') and old.startswith('    vk::Check(vmaCreateBuffer(') and old not in text:
             if 'VkResult result = vmaCreateBuffer(' in text:
                 # This core already retries outside the driver budget on allocation failure.
@@ -527,7 +535,9 @@ MemoryAllocator::MemoryAllocator(const Device &device_)'''),
      'MemoryAllocator::~MemoryAllocator() {\n'
      '    std::lock_guard lock{vma_probe_mutex};\n'
      '    if (vma_probe_allocator == allocator) vma_probe_allocator = nullptr;\n'
-     '    for (auto pool : temporary_pools) if (pool) vmaDestroyPool(allocator, pool);\n}'),
+     '    for (auto pool : temporary_pools) if (pool) vmaDestroyPool(allocator, pool);\n' +
+     ('    DestroySparsePools();\n' if 'DestroySparsePools' in (source / 'src/video_core/vulkan_common/vulkan_memory_allocator.h').read_text() else '') +
+     '}'),
     ('#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n',
      '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include <cstdlib>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
     # What an image was that the allocator could not make at all, for stderr.log.
@@ -961,10 +971,11 @@ gc_setup = '''    const auto ReclaimedBytes = [&](const Image& image) {
 ''' + reclaimed_bytes + '''        return bytes;
     };
 ''' + (port / 'vulkan_gc_downloads.inc').read_text()
+cleanup_begin = gc.index('    const auto Cleanup = [')
+cleanup_end = gc.index('](ImageId image_id)', cleanup_begin) + 1
+cleanup_capture = gc[cleanup_begin:cleanup_end]
 for old, new in [
-    ('    const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,\n'
-     '                          &probe_estimated, &probe_actual, &probe_deletes, &probe_scanned,\n'
-     '                          &probe_costly_skips, &probe_dirty_skips, &probe_decoding_skips]',
+    (cleanup_capture,
      gc_setup + '\n    const auto Cleanup = [&, this]'),
     ('        if (must_download) {', '        if (must_download && !TakePrefetched(image_id, image)) {'),
     # Time the per-image drain Cleanup still takes for an image the prefetch could not batch.
@@ -1233,6 +1244,20 @@ for statement in (
         'auto cfg_cost = Eden::Performance::VulkanTimer(20);\n        ' + statement +
         '\n        cfg_cost.reset();')
 for old, new in shader_costs:
+    if old == '}\n\nPipelineCache::~PipelineCache()' and old not in shader_source:
+        boundary = '}\n\nnamespace {\n// <title>/vulkan_used.bin'
+        new = new.replace(old, boundary)
+        old = boundary
+    if old.startswith('    current_pipeline = pipeline.get();') and old not in shader_source:
+        mark_used = '    current_pipeline->MarkUsed(frame_count);\n'
+        old = old.replace('    return BuiltPipeline', mark_used + '    return BuiltPipeline')
+        new = new.replace('    current_pipeline = pipeline.get();\n',
+                          '    current_pipeline = pipeline.get();\n' + mark_used)
+    if 'Shader::TensorRejected' in old and 'Shader::TensorRejected' not in shader_source:
+        old = ('    if (!is_new) {\n        return pipeline.get();\n    }\n'
+               '    pipeline = CreateComputePipeline(key, shader);\n    return pipeline.get();\n}')
+        trace = new[new.index('    if (::Eden::DevVulkan::trace_pipelines && pipeline)'):]
+        new = ('    if (is_new) {\n        pipeline = CreateComputePipeline(key, shader);\n    }\n' + trace)
     if shader_source.count(old) != 1:
         raise RuntimeError(f'Shader pipeline anchor changed: {old[:60]}')
     shader_source = shader_source.replace(old, new)
@@ -1303,13 +1328,36 @@ probes = {
         # wait is safe (unlike a wait inside an arbitrary staging-buffer allocation).
         ('        .image = memory_allocator.CreateImage(VkImageCreateInfo{\n            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,',
          '        .image = memory_allocator.CreateTemporaryImage(VkImageCreateInfo{\n            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,'),
+        # A full GPU wait per texture was 5% of the split's back thread at Mario Kart World's
+        # title (one streamed texture a frame, the pool always short): the decode images are now
+        # reclaimed once the ones in flight exceed EDEN_PS5_TRANSCODE_PENDING_MIB (64), waiting
+        # for the oldest only. EDEN_PS5_TRANSCODE_FINISH=1 restores the wait after each.
         ('    pending_transcodes.push_back(std::move(pending));\n',
          '    pending_transcodes.push_back(std::move(pending));\n'
          '    const auto memory_short = ::Eden::Performance::graphics_memory_probe.load(std::memory_order_relaxed);\n'
          '    if (memory_short && memory_short()) {\n'
+         '        static const bool finish_each = [] {\n'
+         '            const char* value = std::getenv("EDEN_PS5_TRANSCODE_FINISH");\n'
+         '            return value != nullptr && value[0] == \'1\';\n'
+         '        }();\n'
+         '        static const u64 pending_limit = [] {\n'
+         '            const char* value = std::getenv("EDEN_PS5_TRANSCODE_PENDING_MIB");\n'
+         '            return (value != nullptr ? std::strtoull(value, nullptr, 10) : u64{64}) << 20;\n'
+         '        }();\n'
          '        ::Eden::Performance::Timer finish_timer(::Eden::Performance::mkw_transcode_finish);\n'
-         '        scheduler.Finish();\n'
+         '        if (finish_each) {\n'
+         '            scheduler.Finish();\n'
+         '        }\n'
          '        while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {\n'
+         '            pending_transcodes.pop_front();\n'
+         '        }\n'
+         '        u64 pending_bytes = 0;\n'
+         '        for (const auto& entry : pending_transcodes) {\n'
+         '            pending_bytes += entry.bytes;\n'
+         '        }\n'
+         '        while (pending_bytes > pending_limit && pending_transcodes.size() > 1) {\n'
+         '            scheduler.Wait(pending_transcodes.front().tick);\n'
+         '            pending_bytes -= pending_transcodes.front().bytes;\n'
          '            pending_transcodes.pop_front();\n'
          '        }\n'
          '        staging_buffer_pool.ReleaseCompleted();\n'

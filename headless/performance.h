@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -430,6 +431,8 @@ inline std::array<std::atomic<unsigned long long>, 20> render_conditions{};
 // interrupt, and calls that went to sleep because nothing arrived while spinning.
 struct IdleCounters {
     std::atomic<unsigned long long> calls{0}, nanoseconds{0}, sleeps{0};
+    // Wake-up latency: from the interrupt that woke a sleeping core to its resumption.
+    std::atomic<unsigned long long> wakes{0}, wake_ns{0}, wake_max_ns{0};
 };
 inline std::array<IdleCounters, 6> guest_idle{};
 // PAUSE iterations a guest core spins on its interrupt flag before sleeping (~20 ns each on the
@@ -442,6 +445,17 @@ inline std::atomic<unsigned> idle_spin_iterations{5000};
 // one; tools/prepare-vulkan-port.py). Upstream hands off every 8 draws; dev-settings
 // dispatch_draws=N (8 to 512) overrides the 64 used here.
 inline std::atomic<unsigned> dispatch_mask{63};
+inline void CountWake(std::size_t core, long long nanoseconds) {
+    if (core >= guest_idle.size() || nanoseconds < 0) return;
+    auto& counters = guest_idle[core];
+    counters.wakes.fetch_add(1, std::memory_order_relaxed);
+    counters.wake_ns.fetch_add(static_cast<unsigned long long>(nanoseconds), std::memory_order_relaxed);
+    unsigned long long seen = counters.wake_max_ns.load(std::memory_order_relaxed);
+    while (static_cast<unsigned long long>(nanoseconds) > seen &&
+           !counters.wake_max_ns.compare_exchange_weak(seen, static_cast<unsigned long long>(nanoseconds),
+                                                       std::memory_order_relaxed)) {
+    }
+}
 inline void CountIdle(std::size_t core, long long nanoseconds, bool slept) {
     if (core >= guest_idle.size()) return;
     guest_idle[core].calls.fetch_add(1, std::memory_order_relaxed);
@@ -545,6 +559,53 @@ inline void ReportVulkan() {
         std::printf("EDEN_VULKAN_COST api=%s calls=%llu ns=%llu\n", names[i],
                     vulkan_api[i].calls.load(std::memory_order_relaxed),
                     vulkan_api[i].nanoseconds.load(std::memory_order_relaxed));
+}
+// Guest run time per guest thread since the last report (mkw_guest_run, the JIT wrapper's timer;
+// not in the development profile build): the twelve busiest as tid=ms/runs. A thread near the
+// report interval's length is CPU-bound in guest code.
+inline void ReportGuestRun() {
+    static std::array<unsigned long long, 512> last_ns{}, last_calls{};
+    struct Row {
+        unsigned tid;
+        unsigned long long ns, calls;
+    };
+    std::array<Row, 512> rows{};
+    size_t count = 0;
+    for (unsigned tid = 0; tid < mkw_guest_run.size(); ++tid) {
+        const auto ns = mkw_guest_run[tid].nanoseconds.load(std::memory_order_relaxed);
+        const auto calls = mkw_guest_run[tid].calls.load(std::memory_order_relaxed);
+        const auto delta = ns - last_ns[tid];
+        const auto delta_calls = calls - last_calls[tid];
+        last_ns[tid] = ns;
+        last_calls[tid] = calls;
+        if (delta != 0) rows[count++] = {tid, delta, delta_calls};
+    }
+    std::sort(rows.begin(), rows.begin() + count,
+              [](const Row& a, const Row& b) { return a.ns > b.ns; });
+    std::printf("EDEN_GUEST_RUN");
+    for (size_t i = 0; i < count && i < 12; ++i)
+        std::printf(" %u=%llu/%llu", rows[i].tid, rows[i].ns / 1000000ULL, rows[i].calls);
+    std::printf("\n");
+    // Per guest core since the last report: idles, of them sleeps, average and worst wake-up
+    // latency of the sleeps an interrupt ended (microseconds).
+    static std::array<IdleCounters, 6> last_idle{};
+    std::printf("EDEN_GUEST_WAKE");
+    for (std::size_t core = 0; core < guest_idle.size(); ++core) {
+        auto& now = guest_idle[core];
+        auto& last = last_idle[core];
+        const auto calls = now.calls.load(std::memory_order_relaxed) - last.calls.load(std::memory_order_relaxed);
+        const auto sleeps = now.sleeps.load(std::memory_order_relaxed) - last.sleeps.load(std::memory_order_relaxed);
+        const auto wakes = now.wakes.load(std::memory_order_relaxed) - last.wakes.load(std::memory_order_relaxed);
+        const auto wake_ns = now.wake_ns.load(std::memory_order_relaxed) - last.wake_ns.load(std::memory_order_relaxed);
+        const auto max_ns = now.wake_max_ns.exchange(0, std::memory_order_relaxed);
+        std::printf(" c%zu=%llu/%llu/%llu/%llu", core, calls, sleeps, wakes ? wake_ns / wakes / 1000ULL : 0ULL,
+                    max_ns / 1000ULL);
+        last.calls.store(now.calls.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        last.sleeps.store(now.sleeps.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        last.wakes.store(now.wakes.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        last.wake_ns.store(now.wake_ns.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+    std::printf("\n");
 }
 // Call only before guest startup and after worker shutdown, respectively.
 inline void Reset() {

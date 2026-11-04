@@ -812,6 +812,13 @@ int main(int argc, char** argv) {
         // A32 fastmem window (direct JIT accesses to aliased guest memory): opt-in with dev-settings
         // fastmem=on; on the console it is slower than the page-table path.
         Eden::Fastmem::Request(false);
+        // EDEN_PS5_PRESENT_THREAD=1 (experiment): the renderer copies to the swapchain and presents
+        // on its own thread instead of the GPU thread, which otherwise waits for the Vulkan worker
+        // at every present.
+        if (const char* present_thread = std::getenv("EDEN_PS5_PRESENT_THREAD");
+            present_thread != nullptr && present_thread[0] == '1') {
+            Settings::values.async_presentation = backend == Eden::GraphicsBackend::Vulkan;
+        }
 #ifdef EDEN_DEV_VULKAN
         Settings::values.async_presentation = backend == Eden::GraphicsBackend::Vulkan;
         // Exercise upstream's checked initialization error, never an invalid pointer.
@@ -1153,6 +1160,21 @@ int main(int argc, char** argv) {
             // Mods): Eden's patch manager skips the names in this list. With the Library's Mods
             // switch off for the game, every one of them is in it.
             const u64 title = eden_game_title_id(guest);
+            {
+                // Donkey Kong Bananza's update needs its HMMA compute shaders expanded in software
+                // (patch 0009); other titles keep skipping them, as Mario Kart World's frame rate
+                // was measured. A value from env.txt wins.
+                static bool soft_hmma_by_port = false;
+                if (title == 0x040074A01BF12000ULL) {
+                    if (std::getenv("EDEN_NX2_SOFT_HMMA") == nullptr) {
+                        setenv("EDEN_NX2_SOFT_HMMA", "1", 1);
+                        soft_hmma_by_port = true;
+                    }
+                } else if (soft_hmma_by_port) {
+                    unsetenv("EDEN_NX2_SOFT_HMMA");
+                    soft_hmma_by_port = false;
+                }
+            }
             const auto all_mods = Eden::Mods::List(Eden::AssetsPath("mods"), title);
             auto mods_off = Eden::LoadDisabledMods(title);
             if (!Eden::LoadModsEnabled(title)) {

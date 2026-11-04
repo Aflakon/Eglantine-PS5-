@@ -90,6 +90,22 @@ file(READ "${PROJECT_SOURCE_DIR}/src/common/host_memory.h" port_host_memory_head
 if(port_host_memory_header MATCHES "enum class BackingMode")
     target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_BACKING_MODE=1)
 endif()
+if(port_host_memory_header MATCHES "void MarkUsed\\(")
+    target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_ZERO_TRACKING=1)
+endif()
+if(port_host_memory_header MATCHES "void HintCold\\(")
+    target_compile_definitions(common PRIVATE EDEN_HOST_MEMORY_COLD_HINT=1)
+endif()
+if(PS5_NATIVE AND EXISTS "${PROJECT_SOURCE_DIR}/src/common/logging.cpp")
+    # The native SDK supports IOFile; upstream's PS4 guard otherwise removes every log sink.
+    file(READ "${PROJECT_SOURCE_DIR}/src/common/logging.cpp" port_logging)
+    string(REPLACE "#ifndef __OPENORBIS__" "#if 1" port_logging "${port_logging}")
+    write_derived("${PORT_BUILD_DIR}/logging.cpp" "${port_logging}")
+    get_target_property(common_sources common SOURCES)
+    list(REMOVE_ITEM common_sources logging.cpp)
+    list(APPEND common_sources "${PORT_BUILD_DIR}/logging.cpp")
+    set_property(TARGET common PROPERTY SOURCES "${common_sources}")
+endif()
 
 # Eden's large tables (the guest page table, the GPU's address tables) stay sparse on the PS5:
 # their vector reserves its range with AllocateSparsePages and announces a first write to
@@ -180,6 +196,8 @@ include("${EDEN_PORT_DIR}/jit-alias.cmake")
         "        , EdenJitAllocator())\n    , constant_pool" code_source "${code_source}")
     string(REPLACE "        , nullptr)\n#endif\n    , constant_pool"
         "        , EdenJitAllocator())\n#endif\n    , constant_pool" code_source "${code_source}")
+    string(REPLACE "        , CodeAllocator())\n    , constant_pool"
+        "        , EdenJitAllocator())\n    , constant_pool" code_source "${code_source}")
     string(FIND "${code_source}" ", EdenJitAllocator())" port_jit_allocator)
     if(port_jit_allocator LESS 0)
         message(FATAL_ERROR "JIT allocator adapter did not apply")
@@ -836,7 +854,15 @@ string(REPLACE "${idle_old}" [=[void PhysicalCore::Idle() {
     {
         std::unique_lock lk{m_guard};
         slept = !m_is_interrupted;
+        m_interrupt_ns.store(0, std::memory_order_relaxed);
+        m_sleeping.store(true, std::memory_order_relaxed);
         m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
+        m_sleeping.store(false, std::memory_order_relaxed);
+    }
+    if (const long long sent = m_interrupt_ns.load(std::memory_order_relaxed); slept && sent != 0) {
+        const long long woke = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()).count();
+        ::Eden::Performance::CountWake(m_core_index, woke - sent);
     }
     ::Eden::Performance::CountIdle(m_core_index, ::Eden::Performance::NowNs() - start, slept);
 }
@@ -936,7 +962,7 @@ if(EDEN_DEV_PROFILE)
     list(REMOVE_ITEM core_sources "hle/service/service.cpp")
     list(APPEND core_sources "${PORT_BUILD_DIR}/hle_service.cpp")
     file(READ "${PROJECT_SOURCE_DIR}/src/core/hle/kernel/svc/svc_ipc.cpp" ipc_source)
-    set(ipc_old "    R_RETURN(session->SendSyncRequest(kernel, message, buffer_size));")
+    set(ipc_old "    const Result result = session->SendSyncRequest(kernel, message, buffer_size);")
     string(FIND "${ipc_source}" "${ipc_old}" ipc_at)
     if(ipc_at LESS 0)
         message(FATAL_ERROR "Pinned SendSyncRequest changed")
@@ -945,7 +971,7 @@ if(EDEN_DEV_PROFILE)
     # thread and a frame with a dozen idle helpers reporting the same total look identical without
     # this, and only one of them can be costing the frame (performance.h).
     string(REPLACE "${ipc_old}" [=[    const auto ipc_start = ::Eden::Performance::NowNs();
-    const Result ipc_result = session->SendSyncRequest(kernel, message, buffer_size);
+    const Result result = session->SendSyncRequest(kernel, message, buffer_size);
     const long long ipc_ns = ::Eden::Performance::NowNs() - ipc_start;
     ::Eden::Performance::AddNs(::Eden::Performance::guest_ipc_wait, ipc_ns);
     {
@@ -957,8 +983,7 @@ if(EDEN_DEV_PROFILE)
                 ::Eden::Performance::SetIpcThreadName(ipc_slot, ipc_name->c_str());
         }
         ::Eden::Performance::AddIpcThread(ipc_slot, ipc_ns);
-    }
-    R_RETURN(ipc_result);]=] ipc_source "${ipc_source}")
+    }]=] ipc_source "${ipc_source}")
     write_derived("${PORT_BUILD_DIR}/svc_ipc.cpp" "#include \"${EDEN_PORT_DIR}/performance.h\"\n#include \"core/arm/debug.h\"\n${ipc_source}")
     list(REMOVE_ITEM core_sources "hle/kernel/svc/svc_ipc.cpp")
     list(APPEND core_sources "${PORT_BUILD_DIR}/svc_ipc.cpp")
@@ -1610,7 +1635,9 @@ if(EDEN_DEV_PROFILE)
     function(eden_patch_kernel match replacement)
         string(FIND "${kernel_source}" "${match}" found_at)
         if(found_at LESS 0)
-            message(FATAL_ERROR "Pinned kernel shutdown changed")
+            # Teardown timing only: a moved anchor costs that one measurement, not the build.
+            message(WARNING "Pinned kernel shutdown changed; a teardown timing step is skipped")
+            return()
         endif()
         string(REPLACE "${match}" "${replacement}" patched "${kernel_source}")
         set(kernel_source "${patched}" PARENT_SCOPE)
@@ -2234,7 +2261,8 @@ if(EDEN_PS5_OPENGL)
             set(full_wait "    while (!stop_source.stop_requested() &&\n           !state.queue.TryEmplace(std::move(command_data), fence, block${queue_publish}))\n        std::this_thread::sleep_for(std::chrono::microseconds(100));")
             string(FIND "${gpu_worker}" "${full_wait}" full_wait_offset)
             if(full_wait_offset LESS 0)
-                message(FATAL_ERROR "Pinned GPU queue push changed")
+                # Back-pressure timing only: the core's push blocks inside Emplace now.
+                message(WARNING "Pinned GPU queue push changed; the full-queue timer is skipped")
             endif()
             string(REPLACE "${full_wait}"
                 "    if (stop_source.stop_requested() ||\n        !state.queue.TryEmplace(std::move(command_data), fence, block${queue_publish})) {\n        ::Eden::Performance::Timer full_timer(::Eden::Performance::gpu_queue_full);\n${full_wait}\n    }"
@@ -2247,7 +2275,19 @@ if(EDEN_PS5_OPENGL)
     string(PREPEND gpu_source "#include <glad/glad.h>\n")
     write_derived("${PORT_BUILD_DIR}/include/video_core/gpu_thread.h" "${gpu_thread_header}")
     target_include_directories(video_core BEFORE PRIVATE "${PORT_BUILD_DIR}/include")
-    string(REPLACE "    ~Impl() = default;" "    ~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }" gpu_source "${gpu_source}")
+    string(FIND "${gpu_source}" "    ~Impl() = default;" gpu_default_destructor)
+    if(NOT gpu_default_destructor LESS 0)
+        string(REPLACE "    ~Impl() = default;" "    ~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }" gpu_source "${gpu_source}")
+    else()
+        set(gpu_destructor_anchor "    ~Impl() {\n        NotifyShutdown();\n")
+        string(FIND "${gpu_source}" "${gpu_destructor_anchor}" gpu_destructor_offset)
+        if(gpu_destructor_offset LESS 0)
+            message(FATAL_ERROR "Pinned GPU destructor changed")
+        endif()
+        string(REPLACE "${gpu_destructor_anchor}"
+            "${gpu_destructor_anchor}        if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); }\n"
+            gpu_source "${gpu_source}")
+    endif()
     # Join before unique_ptr destruction clears GPU::impl: queued draws call back
     # through GPU::TickWork. NotifyShutdown also protects service-owned state.
     # Eden joins its worker first; here the waiters are woken first, so that a guest thread waiting

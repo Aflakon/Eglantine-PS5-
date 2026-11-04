@@ -96,6 +96,9 @@ def run_variant(label, perf, extra, original_config):
     entry = games.setdefault(MKW, {})
     if perf: entry['performance'] = perf
     else: entry.pop('performance', None)
+    # res=0.5x: the game's render resolution (settings_store.h kResolutionKeys).
+    if 'res' in extra: entry['resolution'] = extra['res']
+    else: entry.pop('resolution', None)
     put(CONFIG, json.dumps(config, indent=2).encode())
     (vdir / 'config.json').write_text(json.dumps(config, indent=2))
     with connect() as f:
@@ -112,6 +115,7 @@ def run_variant(label, perf, extra, original_config):
     (vdir / 'boot.txt').write_bytes(boot.line)
     # Title screen: the first ~800 presented frames cover loading and the intro.
     start = time.monotonic(); last_total = 0; run_variant.load_snaps = 0
+    run_variant.relaunched = False
     while True:
         text = tail('/data/eglantineps5/logs/heap.log')
         rows = frames_of(text)
@@ -124,9 +128,22 @@ def run_variant(label, perf, extra, original_config):
             raise AssertionError('process restarted during loading')
         if int((time.monotonic() - start) // 20) > getattr(run_variant, 'load_snaps', 0):
             run_variant.load_snaps = getattr(run_variant, 'load_snaps', 0) + 1
-            for name, path, n in [('stderr.log', '/data/eglantineps5/logs/stderr.log', 400000), ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000)]:
+            for name, path, n in [('stderr.log', '/data/eglantineps5/logs/stderr.log', 400000), ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000),
+                                  ('heap.log', '/data/eglantineps5/logs/heap.log', 400000)]:
                 try: (vdir / ('live-' + name)).write_text(tail(path, n))
                 except Exception as e: log('snapshot', name, repr(e))
+        # After any crash (ours or another session's) the app consumes its crash note and opens
+        # the launcher with the notice instead of the forwarded game: kill it and launch again.
+        if total == 0 and time.monotonic() - start > 45 and not getattr(run_variant, 'relaunched', False):
+            err = tail('/data/eglantineps5/logs/stderr.log', 20000)
+            if 'EDEN_LAUNCHER' in err and 'launch: Vulkan' not in err:
+                log('launcher opened (crash notice consumed): relaunching')
+                run_variant.relaunched = True
+                control('kill PPSA98515'); time.sleep(4)
+                boot = Boot()
+                with socket.create_connection((HOST, 9021), 5) as loader: loader.sendall(launch_elf.read_bytes())
+                pid = boot.wait(); log('fresh pid', pid)
+                start = time.monotonic()
         assert time.monotonic() - start < 420, 'title not reached in 420 s'
         time.sleep(3)
     log('title reached after', round(time.monotonic() - start), 's')
@@ -136,7 +153,8 @@ def run_variant(label, perf, extra, original_config):
     def snapshot():
         # Logs are truncated when the crash handler restarts the app: keep live tails.
         for name, path, n in [('stderr.log', '/data/eglantineps5/logs/stderr.log', 400000),
-                              ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000)]:
+                              ('eden_log.txt', '/data/eglantineps5/user/log/eden_log.txt', 600000),
+                              ('heap.log', '/data/eglantineps5/logs/heap.log', 400000)]:
             try: (vdir / ('live-' + name)).write_text(tail(path, n))
             except Exception as e: log('snapshot', name, repr(e))
     while time.monotonic() - m_start < measure:
