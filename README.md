@@ -57,11 +57,11 @@ On the console, the Vulkan driver hung a Switch 2 game when it started from the 
 4. Start **EglantinePS5** from the PS5 home screen.
 
 > [!IMPORTANT]
-> This build uses the same title ID as the upstream app (`PPSA98515`), so it **replaces** it. From `v206.001` on, the in-app updater checks this repository: when a new release is out it asks first, then downloads it, checks its signature and hash, and replaces the app's files in the folder it is installed in. Earlier builds still ask prosperostore.net, so install `v206.001` by hand.
+> This build uses the same title ID as the upstream app (`PPSA98515`), so it **replaces** it. From `v1.206.001` on, the in-app updater checks this repository: when a new release is out it asks first, then downloads it, checks its signature and hash, and replaces the app's files in the folder it is installed in. Earlier builds still ask prosperostore.net, so install `v1.206.001` by hand.
 
 ## Version numbers
 
-`v206.001` is Eglantine's `build-206` plus this project's own count, which starts again at `001` with each new core build. The console's content version is the same thing as `01.206.001`.
+`v1.206.001` is `1`, Eglantine's `build-206`, and this project's own count, which starts again at `001` with each new core build. The console's content version is the same thing as `01.206.001`.
 
 ## Using NUP files
 
@@ -140,11 +140,11 @@ En la consola, el driver de Vulkan colgaba un juego de Switch 2 cuando arrancaba
 4. Abre **EglantinePS5** desde la pantalla de inicio de la PS5.
 
 > [!IMPORTANT]
-> Esta build usa el mismo ID de título que la app original (`PPSA98515`), así que la **sustituye**. Desde `v206.001`, el actualizador integrado consulta este repositorio: cuando sale una release nueva pregunta primero, la descarga, comprueba su firma y su hash, y sustituye los archivos de la app en la carpeta donde esté instalada. Las builds anteriores siguen consultando prosperostore.net, así que instala `v206.001` a mano.
+> Esta build usa el mismo ID de título que la app original (`PPSA98515`), así que la **sustituye**. Desde `v1.206.001`, el actualizador integrado consulta este repositorio: cuando sale una release nueva pregunta primero, la descarga, comprueba su firma y su hash, y sustituye los archivos de la app en la carpeta donde esté instalada. Las builds anteriores siguen consultando prosperostore.net, así que instala `v1.206.001` a mano.
 
 ## Números de versión
 
-`v206.001` es la `build-206` de Eglantine más un contador propio de este proyecto, que vuelve a `001` con cada build nueva del core. En la consola, la versión de contenido es lo mismo: `01.206.001`.
+`v1.206.001` es `1`, la `build-206` de Eglantine y un contador propio de este proyecto, que vuelve a `001` con cada build nueva del core. En la consola, la versión de contenido es lo mismo: `01.206.001`.
 
 ## Usar ficheros NUP
 

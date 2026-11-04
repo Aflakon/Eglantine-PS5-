@@ -455,8 +455,11 @@ void Launcher::draw_about(Canvas &c)
     text_block(c, tr("EglantinePS5 is an unofficial PS5 port brought to you by AngelXex."),
                144.0f, baseline(684.0f, 36.0f, theme::kText24), theme::kText24, 36.0f, theme::kBody,
                748.0f, 2, kShrink);
+    text_block(c, tr("This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."),
+               144.0f, baseline(760.0f, 36.0f, theme::kText24), theme::kText24, 36.0f, theme::kBody,
+               748.0f, 2, kShrink);
     text_shrink(c, tr("Menu sound effects made with ElevenLabs."), 144.0f,
-                baseline(788.0f, 30.0f, theme::kSmall), theme::kSmall, theme::kMeta, 748.0f);
+                baseline(866.0f, 28.0f, theme::kSmall), theme::kSmall, theme::kMeta, 600.0f);
     text(c, version_, 892.0f, baseline(866.0f, 28.0f, theme::kSmall), theme::kSmall,
          theme::kLimePale, Align::right);
 

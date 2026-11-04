@@ -1990,6 +1990,10 @@ msgstr "La sorgente non ha più questo gioco."
 msgid "The update could not finish"
 msgstr "Impossibile completare l'aggiornamento"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "Questa build è di viejunerd: il core Eglantine più recente, EglantinePS5 e NUP con aggiornamento e DLC."
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "Questa console e il server hanno entrambi salvataggi che l'altro non conosce. Quali tenere? Gli altri vengono conservati come backup."

@@ -1990,6 +1990,10 @@ msgstr "Kaynakta bu oyun artık yok."
 msgid "The update could not finish"
 msgstr "Güncelleme tamamlanamadı"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "Bu sürüm viejunerd tarafından hazırlandı: en yeni Eglantine çekirdeği, EglantinePS5 ve güncelleme ile DLC içeren NUP."
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "Bu konsolda da sunucuda da diğerinin bilmediği kaydedilen veriler var. Hangisi kalsın? Diğeri yedek olarak saklanır."

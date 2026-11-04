@@ -892,8 +892,8 @@ std::string EdenServices::clock() {
 unsigned EdenServices::controllers() { return radio_input_controllers(); }
 
 std::string EdenServices::version() {
-    // "01.206.001" is shown as v206.001: Eglantine's build number and this project's own count.
-    return "v" + std::string(Eden::kAppVersion).substr(3);
+    // "01.206.001" is shown as v1.206.001: Eglantine's build number and this project's own count.
+    return "v" + std::string(Eden::kAppVersion).substr(1);
 }
 
 // Games on NFS servers (nfs/nfs.h): the addresses are the lines of config/nfs.txt, mounted in the background

@@ -1990,6 +1990,10 @@ msgstr "Η πηγή δεν έχει πια αυτό το παιχνίδι."
 msgid "The update could not finish"
 msgstr "Η ενημέρωση δεν ολοκληρώθηκε"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "Αυτή η έκδοση είναι από τον/την viejunerd: ο νεότερος πυρήνας Eglantine, το EglantinePS5 και NUP με ενημέρωση και DLC."
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "Η κονσόλα και ο διακομιστής έχουν αποθηκευμένα δεδομένα που η άλλη πλευρά δεν γνωρίζει. Ποια να μείνουν; Τα άλλα φυλάσσονται ως αντίγραφο ασφαλείας."

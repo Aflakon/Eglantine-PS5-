@@ -1990,6 +1990,10 @@ msgstr "Kilden har ikke dette spillet lenger."
 msgid "The update could not finish"
 msgstr "Oppdateringen kunne ikke fullføres"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "Denne versjonen er laget av viejunerd: den nyeste Eglantine-kjernen, EglantinePS5 og NUP med oppdatering og DLC."
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "Både konsollen og serveren har lagrede data som den andre ikke kjenner. Hvilke skal beholdes? De andre tas vare på som sikkerhetskopi."
