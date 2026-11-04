@@ -1990,6 +1990,10 @@ msgstr "ダウンロード元にこのゲームはもうありません。"
 msgid "The update could not finish"
 msgstr "アップデートを完了できませんでした"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "このビルドは viejunerd によるものです: 最新の Eglantine コア、EglantinePS5、アップデートと DLC を含む NUP。"
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "この本体とサーバーの両方に、相手側にないセーブデータがあります。どちらを残しますか？もう一方はバックアップとして保管されます。"

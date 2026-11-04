@@ -1990,6 +1990,10 @@ msgstr "來源已沒有此遊戲。"
 msgid "The update could not finish"
 msgstr "無法完成更新"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "此版本由 viejunerd 製作：最新的 Eglantine 核心、EglantinePS5，以及包含更新和 DLC 的 NUP。"
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "此主機和伺服器上都有對方沒有的存檔資料。要保留哪一個？另一個會保留為備份。"

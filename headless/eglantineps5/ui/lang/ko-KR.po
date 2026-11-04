@@ -1990,6 +1990,10 @@ msgstr "소스에 이 게임이 더 이상 없습니다."
 msgid "The update could not finish"
 msgstr "업데이트를 완료할 수 없습니다"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "이 빌드는 viejunerd가 만들었습니다: 최신 Eglantine 코어, EglantinePS5, 업데이트와 DLC를 포함한 NUP."
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "이 본체와 서버에 서로 모르는 세이브 데이터가 각각 있습니다. 어느 쪽을 남길까요? 다른 쪽은 백업으로 보관됩니다."

@@ -1990,6 +1990,10 @@ msgstr "แหล่ง​นี้​ไม่มี​เกม​นี้​
 msgid "The update could not finish"
 msgstr "ไม่สามารถอัปเดตให้เสร็จได้"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "บิลด์นี้จัดทำโดย viejunerd: คอร์ Eglantine ล่าสุด, EglantinePS5 และ NUP พร้อมอัปเดตและ DLC"
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "เครื่อง​นี้​และ​เซิร์ฟเวอร์​ต่าง​มี​ข้อมูล​เซฟ​ที่​อีก​ฝั่ง​ไม่​รู้จัก ต้องการ​เก็บ​ของ​ฝั่ง​ใด อีก​ฝั่ง​จะ​เก็บ​ไว้​เป็น​ข้อมูล​สำรอง"

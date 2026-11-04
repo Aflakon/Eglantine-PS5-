@@ -1990,6 +1990,10 @@ msgstr "Lähteessä ei enää ole tätä peliä."
 msgid "The update could not finish"
 msgstr "Päivitystä ei voitu viedä loppuun"
 
+#: pe/ui/browse.cpp
+msgid "This build is by viejunerd: the latest Eglantine core, EglantinePS5 and NUP with its update and DLC."
+msgstr "Tämän version on tehnyt viejunerd: uusin Eglantine-ydin, EglantinePS5 ja NUP päivityksineen ja DLC:ineen."
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr "Sekä konsolissa että palvelimella on tallennuksia, joita toinen ei tunne. Kummat säilytetään? Toiset jäävät varmuuskopioksi."

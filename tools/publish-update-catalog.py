@@ -44,7 +44,7 @@ app = {
     'name': param['localizedParameters']['en-US']['titleName'] if 'localizedParameters' in param else 'EglantinePS5',
     'status': 'available',
     'content_version': content,
-    'version': 'v' + content[3:],
+    'version': 'v' + content.removeprefix('0'),
     'format': 'zip',
     'artifact_url': f'https://github.com/{REPOSITORY}/releases/download/{tag}/{archive.name}',
     'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
