@@ -44,13 +44,15 @@ inline std::atomic<bool> firmware_applets{false};
 // One writer per guest core. JIT state is read only by its owning worker after Run.
 enum class CpuPhase : unsigned { Kernel, Guest, Idle };
 struct alignas(64) CpuState { std::atomic<CpuPhase> phase{}; };
-inline std::array<CpuState, 4> cpu_state{};
+// Switch 2 programs run on 6 guest cores.
+inline constexpr std::size_t kGuestCores = 6;
+inline std::array<CpuState, kGuestCores> cpu_state{};
 void SampleCpu(unsigned core, unsigned long long thread, unsigned long long pc, unsigned svc, unsigned fpcr);
 struct alignas(64) Totals {
     std::atomic<unsigned long long> calls{}, nanoseconds{}, requested_bytes{};
 };
-inline std::array<Totals, 4> compilation;
-inline std::array<std::atomic<unsigned long long>, 4> evacuations{};
+inline std::array<Totals, kGuestCores> compilation;
+inline std::array<std::atomic<unsigned long long>, kGuestCores> evacuations{};
 inline Totals storage;
 inline Totals jit_protection;
 inline Totals rasterizer_draw;
@@ -358,7 +360,7 @@ inline std::array<std::atomic<unsigned long long>, 20> render_conditions{};
 struct IdleCounters {
     std::atomic<unsigned long long> calls{0}, nanoseconds{0}, sleeps{0};
 };
-inline std::array<IdleCounters, 4> guest_idle{};
+inline std::array<IdleCounters, kGuestCores> guest_idle{};
 // PAUSE iterations a guest core spins on its interrupt flag before sleeping (~20 ns each on the
 // console). Guest job systems hand work between cores ~150 times a frame; sleeping on each
 // handoff put the host's thread wake-up latency on the critical path. 100 us (the default) took
@@ -395,7 +397,7 @@ inline void AddSince(Totals& totals, long long start) {
 struct alignas(64) JitCallbacks {
     std::atomic<unsigned long long> reads{}, writes{}, exclusive_writes{};
 };
-inline std::array<JitCallbacks, 4> jit_callbacks{};
+inline std::array<JitCallbacks, kGuestCores> jit_callbacks{};
 inline void CountJit(std::atomic<unsigned long long>& counter) {
     counter.fetch_add(1, std::memory_order_relaxed);
 }
