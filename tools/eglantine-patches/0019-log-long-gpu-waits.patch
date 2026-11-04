@@ -1,0 +1,19 @@
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index 6dbabcb43a..dfc07dbc57 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -141,7 +141,13 @@ struct GPU::Impl {
+ 
+     void WaitForSyncOperation(const u64 fence) {
+         std::unique_lock lck{sync_request_mutex};
+-        sync_request_cv.wait(lck, [this, fence] { return CurrentSyncRequestFence() >= fence; });
++        // A wait that never ends is the game on a frozen screen: say so in the log.
++        for (u32 waited = 5; !sync_request_cv.wait_for(lck, std::chrono::seconds{5}, [this, fence] {
++                 return CurrentSyncRequestFence() >= fence;
++             }); waited += 5) {
++            LOG_WARNING(HW_GPU, "A guest thread has waited {} s for the GPU thread: operation {} of {}",
++                        waited, CurrentSyncRequestFence(), fence);
++        }
+     }
+ 
+     void WaitForIdle() {

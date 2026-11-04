@@ -829,6 +829,21 @@ write_derived("${PORT_BUILD_DIR}/physical_core.cpp"
     "#include \"${EDEN_PORT_DIR}/guest_fault.h\"\n#include \"${EDEN_PORT_DIR}/performance.h\"\n#include \"core/arm/debug.h\"\n${physical_core_source}")
 list(REMOVE_ITEM core_sources "hle/kernel/physical_core.cpp")
 list(APPEND core_sources "${PORT_BUILD_DIR}/physical_core.cpp")
+# A game that aborts itself (svcBreak) parks its thread and the other threads wait for ever: the
+# loading screen stayed at 98%. End the session as for a prefetch abort, and say why.
+file(READ "${PROJECT_SOURCE_DIR}/src/core/hle/kernel/svc/svc_exception.cpp" svc_exception_source)
+set(svc_break_old "        system.CurrentPhysicalCore().LogBacktrace(system.Kernel());\n    }\n\n    const bool should_break")
+string(FIND "${svc_exception_source}" "${svc_break_old}" svc_break_at)
+if(svc_break_at LESS 0)
+    message(FATAL_ERROR "Pinned svcBreak changed")
+endif()
+string(REPLACE "${svc_break_old}"
+    "        system.CurrentPhysicalCore().LogBacktrace(system.Kernel());\n        ::Eden::RecordGuestFault(\"the game stopped itself (guest panic)\");\n    }\n\n    const bool should_break"
+    svc_exception_source "${svc_exception_source}")
+write_derived("${PORT_BUILD_DIR}/svc_exception.cpp"
+    "#include \"${EDEN_PORT_DIR}/guest_fault.h\"\n${svc_exception_source}")
+list(REMOVE_ITEM core_sources "hle/kernel/svc/svc_exception.cpp")
+list(APPEND core_sources "${PORT_BUILD_DIR}/svc_exception.cpp")
 if(EDEN_DEV_PROFILE)
     # Guest-visible waits: syncpoint event registration to signal (GPU-pipeline latency
     # the game waits on) and buffer-queue dequeue waits (presentation back-pressure).

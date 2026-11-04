@@ -1814,7 +1814,9 @@ int main(int argc, char** argv) {
                     // (a boot race between two guest threads); a fresh boot normally passes. Retry early faults, report others.
                     // Four retries: two faults in a row were seen with slower GPU synchronization
                     // (RADV_DEBUG=syncshaders), so the per-boot rate can exceed the usual ~1 in 5.
-                    if (game && session_seconds < 60 && guest_fault_retries < 4) {
+                    // A game's own abort comes back the same every time: no retries for it.
+                    if (game && session_seconds < 60 && guest_fault_retries < 4 &&
+                        !completion->guest_fault.starts_with("the game stopped itself")) {
                         ++guest_fault_retries;
                         relaunch_game = selected_game;
                         return_to_menu = true;
