@@ -1,0 +1,32 @@
+diff --git a/src/video_core/engines/kepler_compute.cpp b/src/video_core/engines/kepler_compute.cpp
+index 23ffbad790..a03b154971 100644
+--- a/src/video_core/engines/kepler_compute.cpp
++++ b/src/video_core/engines/kepler_compute.cpp
+@@ -892,9 +892,13 @@ bool KeplerCompute::RememberDlssMotionVectors() {
+ // TLD/SUST operands). Kirby Air Riders' reads a 2048x1152 image at cbuf0+0x80 and writes a
+ // 2560x1440 one at +0x90; Fire Emblem: Fortune's Weave's DLSS network ends with a pass that reads
+ // the input colour through cbuf0+0x328 and writes the DLSS output through cbuf0+0x348 (B10G11R11;
+-// 720p to 1440p docked). Blit one to the other with bilinear filtering when both are plain 2D
+-// images of the same format and the output is larger: title 4's slots first, then Fortune's
+-// Weave's, else the first two handles in cbuf0+0x80..0x11c that form such a pair.
++// 720p to 1440p docked). Donkey Kong Bananza's two networks read the frame through cbuf0+0x60 and
++// write through +0x70 (B10G11R11, 1920x1080 or the dynamic resolution to 2880x1620); its 0x80+
++// words hold stale handles that pair up into unrelated images (720x408 to 1440x810, 4x4 to
++// 360x202), so its slots must win over the scan. Blit one to the other with bilinear filtering
++// when both are plain 2D images of the same format and the output is larger: title 4's slots
++// first, then Fortune's Weave's, then Donkey Kong Bananza's, else the first two handles in
++// cbuf0+0x80..0x11c that form such a pair.
+ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
+     const auto& cbuf = launch_description.const_buffer_config[0];
+     const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+@@ -916,6 +920,10 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
+         output = image(0x348);
+         fortunes_weave = upscale_pair(input, output);
+     }
++    if (!upscale_pair(input, output)) {
++        input = image(0x60);
++        output = image(0x70);
++    }
+     if (!upscale_pair(input, output)) {
+         input.reset();
+         output.reset();

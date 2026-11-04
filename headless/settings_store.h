@@ -630,6 +630,12 @@ inline PerformanceSettings LoadPerformance(uint64_t title_id, const std::string&
         value("skip_invalidation", result.skip_invalidation);
     };
     read("");
+    // Donkey Kong Bananza starts with these until its own settings say otherwise: at the exact GPU
+    // level the GPU thread stays whole, and a frame below 30 fps slows the game itself down.
+    if (title_id == 0x040074A01BF12000ULL) {
+        result.fast_gpu = true;
+        result.reactive_flushing = false;
+    }
     if (title_id) read("/games/" + Settings::TitleKey(title_id));
     return result;
 }

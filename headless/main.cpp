@@ -115,6 +115,7 @@ extern "C" bool eden_jit_shared;  // headless/dynarmic/jit_group_support.inc
 #include "profiles.h"
 #include "stop_limit.h"
 namespace Common {
+void SetGuestMemoryFine(bool on) noexcept;
 bool SparseTablesAvailable() noexcept; // src/memory_pages.cpp
 }
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)
@@ -1040,6 +1041,11 @@ int main(int argc, char** argv) {
             // one is off unless chosen there, for every game or for this one. The levels start
             // every session at their exact values (above), so one that is not chosen is off.
             const auto speed = Eden::LoadPerformance(eden_game_title_id(guest));
+#ifdef PS5_NATIVE
+            // Donkey Kong Bananza runs short of memory: written slots with many pages of zeroes keep
+            // only the others (576 MiB of its 4.3 GiB were such pages), and a write makes one whole.
+            ::Common::SetGuestMemoryFine(eden_game_title_id(guest) == 0x040074A01BF12000ULL);
+#endif
             Settings::values.use_asynchronous_shaders = speed.async_shaders;
             if (speed.fast_gpu) {
                 // Nothing calls UpdateGPUAccuracy() here; set the live value too.
