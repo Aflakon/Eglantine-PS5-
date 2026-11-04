@@ -38,7 +38,7 @@ Current core pin: **Eglantine `3081c8e`** (`nx2`, `build-219`, 2026-11-04).
 | Item | State |
 |---|---|
 | Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and runs on `v1.206.004` (core `d9558f0`), with its update and DLC. Not yet run on core `3081c8e`. Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. |
+| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and runs on the current build (core `3081c8e`). Its update and DLC were last checked on core `d9558f0`. Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. |
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
 | Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
 | Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
@@ -122,7 +122,7 @@ Core actual: **Eglantine `3081c8e`** (`nx2`, `build-219`, 4-nov-2026).
 | Punto | Estado |
 |---|---|
 | Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y funciona con `v1.206.004` (core `d9558f0`), con su update y su DLC. Aún sin ejecutar con el core `3081c8e`. Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. |
+| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y funciona con la build actual (core `3081c8e`). Su update y su DLC se comprobaron por última vez con el core `d9558f0`. Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. |
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
 | Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
 | NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
