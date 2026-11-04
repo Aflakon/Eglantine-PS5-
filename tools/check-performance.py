@@ -27,8 +27,10 @@ for statement in (
 
 for bits in (32, 64):
     wrapper = (generated / f'arm_dynarmic_{bits}.cpp').read_text()
-    assert ('m_core_index == 0 ? 256_MiB : m_core_index < 3 ? 192_MiB : 16_MiB' if bits == 64 else
+    assert ('m_core_index == 0 ? 256_MiB : m_core_index < 3 ? 192_MiB : 128_MiB' if bits == 64 else
             'm_core_index == 0 ? 512_MiB : m_core_index < 3 ? 64_MiB : 16_MiB') in wrapper
+    if bits == 64:  # Switch 2 games: 688 MiB over six cores (CMakeLists.txt).
+        assert 'IsSwitch2() ? (m_core_index == 0 ? 160_MiB : m_core_index == 1 ? 144_MiB : m_core_index < 6 ? 96_MiB : 16_MiB)' in wrapper
     assert 'config.code_cache_size = std::uint32_t(8_MiB);' in wrapper  # Null JIT stays small.
     if development:
         assert f'EDEN_DEV_JIT bits={bits}' in wrapper
