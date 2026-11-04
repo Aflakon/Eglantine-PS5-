@@ -37,9 +37,8 @@ extern "C"
 {
 #endif
 
-/* The catalog's own site. Its mirror (UPDATE_CHECK_MIRROR_API) is asked when this gives no
- * catalog that verifies; see self_update_check. */
-#define SELF_UPDATE_API "https://prosperostore.net/api/v1/"
+/* The catalog: EglantinePS5's own (update_check.h). */
+#define SELF_UPDATE_API UPDATE_CHECK_API
 #define SELF_UPDATE_MAX_MANIFEST (512u * 1024u)
 #define SELF_UPDATE_MAX_APP_FILE 65536u
 /* GitHub's redirect to its release file host carries a signed query of about a thousand

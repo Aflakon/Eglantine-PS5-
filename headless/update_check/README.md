@@ -23,3 +23,5 @@ install, `mount_img.lnk`) before scanning the usual folders.
 In the kit itself, `self_update_check` also copies the catalog entry's
 `release_notes` and `release_notes_truncated` into the offer (`notes`,
 `notes_truncated`), for the update dialog's What's new view.
+
+The catalog is EglantinePS5's own: `UPDATE_CHECK_API` in `update_check.h` names the branch `catalog` of this repository, `self_update_keys` in `self_update.c` holds its two public keys, and `tools/publish-update-catalog.py` writes and signs it for each release. The private keys stay in `~/.config/eglantine-ps5/`, off the repository.

@@ -31,16 +31,16 @@ A PS5 homebrew build that stacks three layers, always updated in this order:
 | 2 | **PS5 frontend** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (launcher, Vulkan/RADV port, packaging), built on BlackBearReloaded's ProsperoEden | This repository's full history is that project's; we rebase on its `main` and keep our changes on top. |
 | 3 | **NUP support** | `.nup` is Eglantine's single-file package (base game + update + DLC) | The library lists `.nup` files, runs them, and can **pack a game folder into a NUP** on the console. |
 
-Current core pin: **Eglantine `05e3b9d`** (`nx2`, 2026-11-03).
+Current core pin: **Eglantine `d9558f0`** (`nx2`, 2026-11-04).
 
 ## Status (honest version)
 
 | Item | State |
 |---|---|
 | Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and plays on the current build (core `05e3b9d`). Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. |
+| Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Boots and plays on core `05e3b9d`. Last measured on core `0da830e`: **Docked, 1x resolution, about 20 fps**. The current build (core `d9558f0`) compiles but has **not been run on a console yet**. |
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
-| Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
+| Update and DLC inside a NUP | Both load, and the Library shows them. Checked on core `05e3b9d` with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
 | Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
 | Other Switch 2 titles | Some fail early. Nothing is promised beyond what is listed here. |
 | Frame generation (Lossless Scaling) | Compiled in, but pointless at a 20 fps base. |
@@ -57,7 +57,11 @@ On the console, the Vulkan driver hung a Switch 2 game when it started from the 
 4. Start **EglantinePS5** from the PS5 home screen.
 
 > [!IMPORTANT]
-> This build uses the same title ID as the upstream app (`PPSA98515`), so it **replaces** it. The in-app updater asks prosperostore.net for upstream releases; when it offers an update, choose **Skip** or it may overwrite this build.
+> This build uses the same title ID as the upstream app (`PPSA98515`), so it **replaces** it. From `v206.001` on, the in-app updater checks this repository: when a new release is out it asks first, then downloads it, checks its signature and hash, and replaces the app's files in the folder it is installed in. Earlier builds still ask prosperostore.net, so install `v206.001` by hand.
+
+## Version numbers
+
+`v206.001` is Eglantine's `build-206` plus this project's own count, which starts again at `001` with each new core build. The console's content version is the same thing as `01.206.001`.
 
 ## Using NUP files
 
@@ -73,10 +77,8 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 |---|---|
 | 0001 | Extracted dumps with `base/` + `updates/<version>/` folders |
 | 0002 | Ampere U16 float-to-int conversion source modifiers (shader recompiler) |
-| 0003 | Audio-out manager session lifetime fix |
 | 0004 | NUP packer lists folders through `ListDirectory` (native directory reader on the console) |
 | 0005 | Log why an NSO or NUP fails to load |
-| 0007 | Generic31 attribute components (Bananza shaders) |
 | 0008 | `nx2:vi2` command 201 stub (Switch 2) |
 | 0009 | Guest-thread watchdog written to `eden_log.txt` (diagnosis of hangs) |
 | 0010 | Do not load/save the global Vulkan static pipeline cache |
@@ -112,16 +114,16 @@ Una build homebrew para PS5 que apila tres capas, siempre actualizadas en este o
 | 2 | **Frontend de PS5** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (lanzador, port de Vulkan/RADV, empaquetado), basado en ProsperoEden de BlackBearReloaded | El historial de este repo es el de ese proyecto; rebaseamos sobre su `main` y mantenemos nuestros cambios encima. |
 | 3 | **Soporte NUP** | `.nup` es el paquete de un solo fichero de Eglantine (juego base + update + DLC) | La biblioteca lista y ejecuta `.nup` y puede **empaquetar una carpeta de juego en un NUP** en la propia consola. |
 
-Core actual: **Eglantine `05e3b9d`** (`nx2`, 3-nov-2026).
+Core actual: **Eglantine `d9558f0`** (`nx2`, 4-nov-2026).
 
 ## Estado (versión honesta)
 
 | Punto | Estado |
 |---|---|
 | Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus. |
-| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y se juega con la build actual (core `05e3b9d`). Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. |
+| Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Arranca y se juega con el core `05e3b9d`. Última medición, con el core `0da830e`: **modo TV, resolución 1x, unos 20 fps**. La build actual (core `d9558f0`) compila, pero **aún no se ha ejecutado en consola**. |
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
-| Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
+| Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con el core `05e3b9d` y Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
 | NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
 | Otros juegos de Switch 2 | Algunos fallan pronto. No prometemos nada más allá de lo que aparece aquí. |
 | Generación de fotogramas (Lossless Scaling) | Incluida, pero sin sentido con una base de 20 fps. |
@@ -138,7 +140,11 @@ En la consola, el driver de Vulkan colgaba un juego de Switch 2 cuando arrancaba
 4. Abre **EglantinePS5** desde la pantalla de inicio de la PS5.
 
 > [!IMPORTANT]
-> Esta build usa el mismo ID de título que la app original (`PPSA98515`), así que la **sustituye**. El actualizador integrado consulta prosperostore.net por versiones de upstream; si ofrece una actualización, elige **Skip** o podría sobrescribir esta build.
+> Esta build usa el mismo ID de título que la app original (`PPSA98515`), así que la **sustituye**. Desde `v206.001`, el actualizador integrado consulta este repositorio: cuando sale una release nueva pregunta primero, la descarga, comprueba su firma y su hash, y sustituye los archivos de la app en la carpeta donde esté instalada. Las builds anteriores siguen consultando prosperostore.net, así que instala `v206.001` a mano.
+
+## Números de versión
+
+`v206.001` es la `build-206` de Eglantine más un contador propio de este proyecto, que vuelve a `001` con cada build nueva del core. En la consola, la versión de contenido es lo mismo: `01.206.001`.
 
 ## Usar ficheros NUP
 

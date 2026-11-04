@@ -31,7 +31,7 @@ int main() {
     // The request names the title and nothing else.
     char url[96];
     assert(update_check_url(url, sizeof(url), "PPSA98515") != 0);
-    assert(std::strcmp(url, "https://prosperostore.net/api/v1/apps/PPSA98515.json") == 0);
+    assert(std::strcmp(url, "https://raw.githubusercontent.com/viejunerd/Eglantine-PS5-/catalog/apps/PPSA98515.json") == 0);
     assert(update_check_url(url, sizeof(url), "../PPSA98515") == 0);
 
     // A newer release is listed: its name is what the notification shows.

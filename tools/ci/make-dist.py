@@ -22,7 +22,7 @@ if len(args) != 1:
     sys.exit(__doc__.strip())
 app = pathlib.Path(args[0]).resolve()
 version = json.loads((app / 'sce_sys/param.json').read_text())['contentVersion']
-tag = 'v' + version.removeprefix('0')
+tag = 'v' + version[3:]  # 01.206.001 is v206.001 (README, Version numbers)
 dist = root / 'dist'
 shutil.rmtree(dist, ignore_errors=True)
 dist.mkdir()

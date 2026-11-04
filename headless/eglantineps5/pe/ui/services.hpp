@@ -52,7 +52,7 @@ struct NupStatus
     std::string message;        // what happened, once it ended
 };
 
-// A newer release of the app, listed on prosperostore.net.
+// A newer release of the app, listed in the catalog (update_check.h).
 struct UpdateOffer
 {
     std::string version;      // its name: "v1.000.060"

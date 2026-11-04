@@ -42,13 +42,11 @@ extern "C"
 {
 #endif
 
-#define UPDATE_CHECK_HOST "prosperostore.net"
-/* The catalog's store API is published in two places: on its own site, and as a mirror for
- * networks that block that site. They hold the same answers. Each place has its own signed
- * manifest, because icon addresses inside the files name the place they are served from. */
-#define UPDATE_CHECK_API "https://" UPDATE_CHECK_HOST "/api/v1/"
-#define UPDATE_CHECK_MIRROR_API "https://darkxex.github.io/ps5-homebrew-catalog/api/v1/"
-#define UPDATE_CHECK_ORIGINS 2
+#define UPDATE_CHECK_HOST "raw.githubusercontent.com"
+/* EglantinePS5: its own catalog, the branch `catalog` of its repository
+ * (tools/publish-update-catalog.py), instead of prosperostore.net and that site's mirror. */
+#define UPDATE_CHECK_API "https://" UPDATE_CHECK_HOST "/viejunerd/Eglantine-PS5-/catalog/"
+#define UPDATE_CHECK_ORIGINS 1
 #define UPDATE_CHECK_MAX_RESPONSE 65536u
 
     typedef enum update_check_state

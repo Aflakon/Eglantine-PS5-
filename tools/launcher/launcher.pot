@@ -2053,9 +2053,9 @@ msgstr ""
 msgid "The reading you cancelled is still ending. Its files are kept; try again in a moment."
 msgstr ""
 
-#. Shown at the end of release notes that were cut short; prosperostore.net is a site's name and stays as it is.
+#. Shown at the end of release notes that were cut short; GitHub is a site's name and stays as it is.
 #: pe/ui/update.cpp
-msgid "The rest is on the app's page on prosperostore.net."
+msgid "The rest is on the app's page on GitHub."
 msgstr ""
 
 #: pe/ui/save_sync.cpp
@@ -2209,9 +2209,9 @@ msgstr ""
 msgid "Version {0}"
 msgstr ""
 
-#. {0}: the newer release's number, for example 1.000.050; prosperostore.net is a site's name and stays as it is.
+#. {0}: the newer release's number, for example 1.000.050; GitHub is a site's name and stays as it is.
 #: pe/ui/launcher.cpp
-msgid "Version {0} is on prosperostore.net"
+msgid "Version {0} is on GitHub"
 msgstr ""
 
 #. Update dialog: a newer release of this app; {0} is its number, for example 1.000.060.

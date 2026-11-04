@@ -85,7 +85,7 @@ static int is_title_id(const char *text)
 
 const char *update_check_api(int origin)
 {
-    return origin == 0 ? UPDATE_CHECK_API : origin == 1 ? UPDATE_CHECK_MIRROR_API : NULL;
+    return origin == 0 ? UPDATE_CHECK_API : NULL;
 }
 
 size_t update_check_url_at(char *out, size_t size, const char *title_id, int origin)

@@ -892,21 +892,8 @@ std::string EdenServices::clock() {
 unsigned EdenServices::controllers() { return radio_input_controllers(); }
 
 std::string EdenServices::version() {
-    // "01.000.040" is shown as v1.0.40: each number without its leading zeros.
-    std::string shown = "v";
-    std::string number;
-    for (const char* c = Eden::kAppVersion;; ++c) {
-        if (*c == '.' || *c == '\0') {
-            const auto first = number.find_first_not_of('0');
-            shown += first == std::string::npos ? "0" : number.substr(first);
-            number.clear();
-            if (*c == '\0') break;
-            shown += '.';
-        } else {
-            number += *c;
-        }
-    }
-    return shown;
+    // "01.206.001" is shown as v206.001: Eglantine's build number and this project's own count.
+    return "v" + std::string(Eden::kAppVersion).substr(3);
 }
 
 // Games on NFS servers (nfs/nfs.h): the addresses are the lines of config/nfs.txt, mounted in the background
