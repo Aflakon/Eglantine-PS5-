@@ -535,7 +535,9 @@ MemoryAllocator::MemoryAllocator(const Device &device_)'''),
      'MemoryAllocator::~MemoryAllocator() {\n'
      '    std::lock_guard lock{vma_probe_mutex};\n'
      '    if (vma_probe_allocator == allocator) vma_probe_allocator = nullptr;\n'
-     '    for (auto pool : temporary_pools) if (pool) vmaDestroyPool(allocator, pool);\n}'),
+     '    for (auto pool : temporary_pools) if (pool) vmaDestroyPool(allocator, pool);\n' +
+     ('    DestroySparsePools();\n' if 'DestroySparsePools' in (source / 'src/video_core/vulkan_common/vulkan_memory_allocator.h').read_text() else '') +
+     '}'),
     ('#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n',
      '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include <cstdlib>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
     # What an image was that the allocator could not make at all, for stderr.log.
