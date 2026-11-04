@@ -245,9 +245,9 @@ struct CpuSample {
     unsigned svc = ~0u, fpcr = 0;
     unsigned long long compilations = 0, compile_ns = 0;
 };
-std::array<CpuSample, 4> cpu_samples;
+std::array<CpuSample, kGuestCores> cpu_samples;
 // Read/written only by the worker owning this core; samples use workers_mutex.
-std::array<unsigned, 4> sampled_epoch{~0u, ~0u, ~0u, ~0u};
+std::array<unsigned, kGuestCores> sampled_epoch{~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
 clockid_t process_clock{};
 int CurrentCpuClock(clockid_t* clock, bool process = false) {
 #ifdef PS5_NATIVE
