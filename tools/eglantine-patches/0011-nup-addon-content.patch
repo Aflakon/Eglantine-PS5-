@@ -1,0 +1,361 @@
+diff --git a/src/core/core.cpp b/src/core/core.cpp
+index 993b48f..76ff6e1 100644
+--- a/src/core/core.cpp
++++ b/src/core/core.cpp
+@@ -533,6 +533,9 @@ struct System::Impl {
+         fs_controller.Reset();
+         cheat_engine.reset();
+         core_timing.ClearPendingEvents();
++        if (content_provider) {
++            content_provider->SetSlot(FileSys::ContentProviderUnionSlot::NupAddOns, nullptr);
++        }
+         app_loader.reset();
+         audio_core.reset();
+         gpu_core.reset();
+diff --git a/src/core/file_sys/content_archive.cpp b/src/core/file_sys/content_archive.cpp
+index 1ba7bd3..248a8c2 100644
+--- a/src/core/file_sys/content_archive.cpp
++++ b/src/core/file_sys/content_archive.cpp
+@@ -118,6 +118,10 @@ NCA::NCA(VirtualFile file_, const NCA* base_nca, bool allow_missing_base)
+     }
+ }
+ 
++NCA::NCA(u64 title_id, std::function<VirtualFile()> romfs_source)
++    : status{Loader::ResultStatus::Success}, keys{Core::Crypto::KeyManager::Instance()},
++      loose_title_id{title_id}, loose_romfs{std::move(romfs_source)} {}
++
+ NCA::~NCA() = default;
+ 
+ Loader::ResultStatus NCA::GetStatus() const {
+@@ -139,18 +143,24 @@ std::vector<VirtualDir> NCA::GetSubdirectories() const {
+ }
+ 
+ std::string NCA::GetName() const {
+-    return file->GetName();
++    return file ? file->GetName() : std::string{};
+ }
+ 
+ VirtualDir NCA::GetParentDirectory() const {
+-    return file->GetContainingDirectory();
++    return file ? file->GetContainingDirectory() : nullptr;
+ }
+ 
+ NCAContentType NCA::GetType() const {
++    if (!reader) {
++        return NCAContentType::Data;
++    }
+     return static_cast<NCAContentType>(reader->GetContentType());
+ }
+ 
+ u64 NCA::GetTitleId() const {
++    if (!reader) {
++        return loose_title_id;
++    }
+     if (is_update) {
+         return reader->GetProgramId() | 0x800;
+     }
+@@ -158,17 +168,20 @@ u64 NCA::GetTitleId() const {
+ }
+ 
+ RightsId NCA::GetRightsId() const {
+-    RightsId result;
++    RightsId result{};
++    if (!reader) {
++        return result;
++    }
+     reader->GetRightsId(result.data(), result.size());
+     return result;
+ }
+ 
+ u32 NCA::GetSDKVersion() const {
+-    return reader->GetSdkAddonVersion();
++    return reader ? reader->GetSdkAddonVersion() : 0;
+ }
+ 
+ u8 NCA::GetKeyGeneration() const {
+-    return reader->GetKeyGeneration();
++    return reader ? reader->GetKeyGeneration() : 0;
+ }
+ 
+ bool NCA::IsUpdate() const {
+@@ -176,7 +189,7 @@ bool NCA::IsUpdate() const {
+ }
+ 
+ VirtualFile NCA::GetRomFS() const {
+-    return romfs;
++    return loose_romfs ? loose_romfs() : romfs;
+ }
+ 
+ VirtualDir NCA::GetExeFS() const {
+diff --git a/src/core/file_sys/content_archive.h b/src/core/file_sys/content_archive.h
+index b88fcdc..277cf88 100644
+--- a/src/core/file_sys/content_archive.h
++++ b/src/core/file_sys/content_archive.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <functional>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -67,6 +68,9 @@ inline bool IsDirectoryLogoPartition(const VirtualDir& pfs) {
+ class NCA : public ReadOnlyVfsDirectory {
+ public:
+     explicit NCA(VirtualFile file, const NCA* base_nca = nullptr, bool allow_missing_base = false);
++    /// Data content that is not in an NCA file (a NUP keeps its add-ons as loose files): a title
++    /// and a RomFS, which is only built when it is asked for.
++    NCA(u64 title_id, std::function<VirtualFile()> romfs_source);
+     ~NCA() override;
+ 
+     Loader::ResultStatus GetStatus() const;
+@@ -106,6 +110,9 @@ private:
+ 
+     Core::Crypto::KeyManager& keys;
+     std::shared_ptr<NcaReader> reader;
++
++    u64 loose_title_id{};
++    std::function<VirtualFile()> loose_romfs;
+ };
+ 
+ } // namespace FileSys
+diff --git a/src/core/file_sys/nup_container.cpp b/src/core/file_sys/nup_container.cpp
+index 27ac448..0ba905d 100644
+--- a/src/core/file_sys/nup_container.cpp
++++ b/src/core/file_sys/nup_container.cpp
+@@ -19,6 +19,8 @@
+ #include "common/fs/path_util.h"
+ #include "common/logging.h"
+ #include "common/swap.h"
++#include "core/file_sys/content_archive.h"
++#include "core/file_sys/romfs.h"
+ #include "core/file_sys/vfs/vfs_offset.h"
+ 
+ namespace FileSys {
+@@ -839,4 +841,85 @@ Loader::ResultStatus NupContainer::VerifyIntegrity(
+     return Loader::ResultStatus::Success;
+ }
+ 
++NupAddOnProvider::NupAddOnProvider(NupContainer& nup_) : nup{nup_} {
++    const auto& packages = nup.GetPackages();
++    for (std::size_t i = 0; i < packages.size(); ++i) {
++        const auto& package = packages[i];
++        if (package.kind != NupContainer::PackageKind::Addon || package.romfs_dir == NoDir) {
++            continue;
++        }
++        const auto [entry, added] = addons.try_emplace(package.title_id, i);
++        if (!added && package.version >= packages[entry->second].version) {
++            entry->second = i;
++        }
++    }
++}
++
++NupAddOnProvider::~NupAddOnProvider() = default;
++
++void NupAddOnProvider::Refresh() {}
++
++bool NupAddOnProvider::HasEntry(u64 title_id, ContentRecordType type) const {
++    return type == ContentRecordType::Data && addons.contains(title_id);
++}
++
++std::optional<u32> NupAddOnProvider::GetEntryVersion(u64 title_id) const {
++    const auto entry = addons.find(title_id);
++    if (entry == addons.end()) {
++        return std::nullopt;
++    }
++    return nup.GetPackages()[entry->second].version;
++}
++
++VirtualFile NupAddOnProvider::GetEntryUnparsed(u64, ContentRecordType) const {
++    return nullptr;
++}
++
++VirtualFile NupAddOnProvider::GetEntryRaw(u64, ContentRecordType) const {
++    return nullptr;
++}
++
++std::unique_ptr<NCA> NupAddOnProvider::GetEntry(u64 title_id, ContentRecordType type) const {
++    if (!HasEntry(title_id, type)) {
++        return nullptr;
++    }
++    return std::make_unique<NCA>(title_id, [this, title_id] { return OpenRomFS(title_id); });
++}
++
++std::vector<ContentProviderEntry> NupAddOnProvider::ListEntriesFilter(
++    std::optional<TitleType> title_type, std::optional<ContentRecordType> record_type,
++    std::optional<u64> title_id) const {
++    std::vector<ContentProviderEntry> out;
++    if ((title_type && *title_type != TitleType::AOC) ||
++        (record_type && *record_type != ContentRecordType::Data)) {
++        return out;
++    }
++    for (const auto& [id, package] : addons) {
++        if (!title_id || *title_id == id) {
++            out.push_back({id, ContentRecordType::Data});
++        }
++    }
++    return out;
++}
++
++VirtualFile NupAddOnProvider::OpenRomFS(u64 title_id) const {
++    // Service threads mount at the same time, and the container's directory cache has no lock.
++    const std::scoped_lock lock{romfs_mutex};
++    if (const auto found = romfs_files.find(title_id); found != romfs_files.end()) {
++        return found->second;
++    }
++    const auto entry = addons.find(title_id);
++    if (entry == addons.end()) {
++        return nullptr;
++    }
++    auto romfs = CreateRomFS(nup.GetRomFSDir(entry->second));
++    if (romfs == nullptr) {
++        LOG_ERROR(Loader, "NUP add-on {:016X}: its RomFS could not be built", title_id);
++        return nullptr;
++    }
++    LOG_INFO(Loader, "NUP add-on {:016X} mounted ({} bytes)", title_id, romfs->GetSize());
++    romfs_files.emplace(title_id, romfs);
++    return romfs;
++}
++
+ } // namespace FileSys
+diff --git a/src/core/file_sys/nup_container.h b/src/core/file_sys/nup_container.h
+index 8787717..2984775 100644
+--- a/src/core/file_sys/nup_container.h
++++ b/src/core/file_sys/nup_container.h
+@@ -7,6 +7,7 @@
+ #include <filesystem>
+ #include <functional>
+ #include <list>
++#include <map>
+ #include <memory>
+ #include <mutex>
+ #include <optional>
+@@ -16,6 +17,7 @@
+ 
+ #include "common/common_types.h"
+ #include "common/fs/file.h"
++#include "core/file_sys/registered_cache.h"
+ #include "core/file_sys/vfs/vfs_types.h"
+ #include "core/file_sys/vfs/vfs_vector.h"
+ #include "core/loader/loader.h"
+@@ -208,4 +210,39 @@ private:
+     std::shared_ptr<NupDecompressCache> cache;
+ };
+ 
++/**
++ * The add-on packages of a NUP as system contents, so that a game finds them as it finds an NSP's
++ * add-ons: aoc:u lists them and fsp-srv mounts them by data ID. They have no NCA, so GetEntry gives
++ * an NCA object without a file and the raw getters give nothing. A package's RomFS is built when
++ * the game first mounts it. The container must outlive this provider.
++ */
++class NupAddOnProvider final : public ContentProvider {
++public:
++    explicit NupAddOnProvider(NupContainer& nup_);
++    ~NupAddOnProvider() override;
++
++    std::size_t GetCount() const {
++        return addons.size();
++    }
++
++    void Refresh() override;
++    bool HasEntry(u64 title_id, ContentRecordType type) const override;
++    std::optional<u32> GetEntryVersion(u64 title_id) const override;
++    VirtualFile GetEntryUnparsed(u64 title_id, ContentRecordType type) const override;
++    VirtualFile GetEntryRaw(u64 title_id, ContentRecordType type) const override;
++    std::unique_ptr<NCA> GetEntry(u64 title_id, ContentRecordType type) const override;
++    std::vector<ContentProviderEntry> ListEntriesFilter(
++        std::optional<TitleType> title_type = {}, std::optional<ContentRecordType> record_type = {},
++        std::optional<u64> title_id = {}) const override;
++
++private:
++    VirtualFile OpenRomFS(u64 title_id) const;
++
++    NupContainer& nup;
++    std::map<u64, std::size_t> addons; ///< Title ID -> package index (its newest version)
++
++    mutable std::mutex romfs_mutex;
++    mutable std::map<u64, VirtualFile> romfs_files;
++};
++
+ } // namespace FileSys
+diff --git a/src/core/file_sys/registered_cache.h b/src/core/file_sys/registered_cache.h
+index 89140a2..895ff8c 100644
+--- a/src/core/file_sys/registered_cache.h
++++ b/src/core/file_sys/registered_cache.h
+@@ -224,6 +224,7 @@ enum class ContentProviderUnionSlot {
+     SDMC,           ///< SD Card
+     FrontendManual, ///< Frontend-defined game list or similar
+     External,       ///< External content from NSP/XCI files in configured directories
++    NupAddOns,      ///< Add-on content inside the running game's NUP file
+     Count,
+ };
+ 
+diff --git a/src/core/loader/nup.cpp b/src/core/loader/nup.cpp
+index 7ddfb89..e41ff02 100644
+--- a/src/core/loader/nup.cpp
++++ b/src/core/loader/nup.cpp
+@@ -150,18 +150,6 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
+                 program.localized_icons.front().second, "icon.dat");
+         }
+     }
+-
+-    const auto addon_count = std::count_if(nup->GetPackages().begin(), nup->GetPackages().end(),
+-                                           [](const auto& package) {
+-                                               return package.kind ==
+-                                                      NupContainer::PackageKind::Addon;
+-                                           });
+-    if (addon_count > 0) {
+-        LOG_WARNING(Loader,
+-                    "NUP container has {} add-on content package(s); AoC mounting is not "
+-                    "supported yet",
+-                    addon_count);
+-    }
+ }
+ 
+ AppLoader_NUP::~AppLoader_NUP() = default;
+@@ -191,6 +179,16 @@ AppLoader::LoadResult AppLoader_NUP::Load(Kernel::KProcess& process, Core::Syste
+         std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(),
+                                                 system.GetFileSystemController()));
+ 
++    // Before the services start: aoc:u reads the list of add-ons once, when it is created. The
++    // system takes the provider out again at shutdown, before this loader goes.
++    addon_provider = std::make_unique<FileSys::NupAddOnProvider>(*nup);
++    if (addon_provider->GetCount() > 0) {
++        LOG_INFO(Loader, "NUP container has {} add-on content package(s)",
++                 addon_provider->GetCount());
++        system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::NupAddOns,
++                                       addon_provider.get());
++    }
++
+     is_loaded = true;
+     return result;
+ }
+diff --git a/src/core/loader/nup.h b/src/core/loader/nup.h
+index 1f9dd59..63f89d9 100644
+--- a/src/core/loader/nup.h
++++ b/src/core/loader/nup.h
+@@ -12,6 +12,7 @@
+ 
+ namespace FileSys {
+ class NACP;
++class NupAddOnProvider;
+ class NupContainer;
+ } // namespace FileSys
+ 
+@@ -19,7 +20,7 @@ namespace Loader {
+ 
+ /// Loads a NUP (NX Package) container: loose ExeFS/RomFS trees for a base
+ /// program plus its updates in one file. The newest update package is layered
+-/// over the base; add-on content packages are recognized but not yet mounted.
++/// over the base; add-on content packages are offered to the game through a content provider.
+ class AppLoader_NUP final : public AppLoader {
+ public:
+     explicit AppLoader_NUP(FileSys::VirtualFile file_);
+@@ -53,6 +54,7 @@ public:
+ 
+ private:
+     std::unique_ptr<FileSys::NupContainer> nup;
++    std::unique_ptr<FileSys::NupAddOnProvider> addon_provider;
+     std::unique_ptr<AppLoader> secondary_loader;
+ 
+     std::unique_ptr<FileSys::NACP> nacp_file;
