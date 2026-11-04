@@ -1162,7 +1162,7 @@ int main(int argc, char** argv) {
             const u64 title = eden_game_title_id(guest);
             {
                 // Donkey Kong Bananza's update needs its HMMA compute shaders expanded in software
-                // (patch 0011); other titles keep skipping them, as Mario Kart World's frame rate
+                // (patch 0009); other titles keep skipping them, as Mario Kart World's frame rate
                 // was measured. A value from env.txt wins.
                 static bool soft_hmma_by_port = false;
                 if (title == 0x040074A01BF12000ULL) {
