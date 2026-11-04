@@ -1,13 +1,19 @@
 diff --git a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
-index cadc3ea34e0ed9450643e320a1debeabe1e89d86..c9066fe124292eec16c5df6d26a5a47b358a22b0 100644
+index cadc3ea34e0ed9450643e320a1debeabe1e89d86..2a507fe36190df1009f95c459904c88e59d92ac9 100644
 --- a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
 +++ b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
-@@ -1293,8 +1293,67 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
+@@ -1293,8 +1293,74 @@ case 0x311: { // F2I.FTZ.U64.TRUNC, per nvdisasm: Maxwell's F2I gives 32 bits, s
                  }
                  break;
              }
 -            if (mode != "fast" || !support_cooperative_matrix)
--                return fail(index, "native matrix multiply cooperative path unavailable");
++            // Software expansion only where the port asks for it (EDEN_NX2_SOFT_HMMA=1, set for
++            // Donkey Kong Bananza): other titles keep skipping these shaders as before, which
++            // Mario Kart World's frame rate was measured with.
++            const char* soft_hmma = std::getenv("EDEN_NX2_SOFT_HMMA");
++            if ((mode != "fast" || !support_cooperative_matrix) &&
++                (soft_hmma == nullptr || soft_hmma[0] != '1'))
+                 return fail(index, "native matrix multiply cooperative path unavailable");
 +            if (mode != "fast" || !support_cooperative_matrix) {
 +                // Software warp expansion (upstream nx2): no tensor or cooperative-matrix
 +                // extension needed. Donkey Kong Bananza's update runs HMMA in compute passes the
