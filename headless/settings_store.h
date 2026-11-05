@@ -635,7 +635,8 @@ inline PerformanceSettings LoadPerformance(uint64_t title_id, const std::string&
     // split GPU thread stays off and every fence waits for the host GPU. The game's own values
     // (Triangle in the Library) still win below.
     if ((title_id >> 56) == 0x04) {
-        result.fast_gpu = true;
+        // Mario Kart World has not got past loading with the fast fences; without them it has.
+        result.fast_gpu = title_id != 0x0400C3F00006E000ULL;
         result.reactive_flushing = false;
     }
     if (title_id) read("/games/" + Settings::TitleKey(title_id));
