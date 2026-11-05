@@ -118,6 +118,10 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0046 | Mario Kart World runs without task and mesh draws, which hang the PS5's GPU |
 | 0047 | Native compute storage buffers sized from their descriptors outside DLSS passes, far fewer readbacks; Mario Kart World's present pacing (Eglantine PR 609) |
 | 0048 | Command lists submitted behind a queued GPU map are copied after the map, not as zeros (Eglantine PR 543, merged with this core's empty-list handling) |
+| 0049 | Fence releases from the puller run on the split GPU thread's back thread (Aubépine `7e20d36e9e`, after Lichii #70: Ocarina of Time stopped after its intro) |
+| 0050 | Buffer flushes the front GPU thread needs run on the back thread, which owns the Vulkan scheduler (Aubépine `4d3b54834e`, after Lichii `12db3f599`; Donkey Kong Bananza crashed in `CopyBuffer`, Eglantine issue 636) |
+| 0051 | Ocarina of Time's upscaling networks run through the native HMMA lowering instead of the plain upscale stand-in (its movies were black); `EDEN_NX2_TENSOR=0` turns this off |
+| 0052 | Multiplies by 0 and 1 are folded so Ocarina of Time's sky ambient finds its buffer; pipeline cache versions bumped (Orchid `636c5fb385`) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 

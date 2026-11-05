@@ -1,0 +1,30 @@
+diff --git a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
+index 9608bed6a1..a2f2f38179 100644
+--- a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
++++ b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
+@@ -4,6 +4,7 @@
+ // Encoding reference: Mesa NAK sm70_encode.rs (MIT), Copyright 2022 Collabora, Ltd.
+ #pragma once
+ 
++#include "common/settings.h"
+ #include <fmt/format.h>
+ #include <cstdlib>
+ #include <algorithm>
+@@ -1557,7 +1558,16 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+             // or with EDEN_NX2_TENSOR set (the QMD still completes when rejected).
+             // EDEN_NX2_TENSOR=stub keeps the rest of the program but makes every HMMA D = C.
+             static const char* const forced_mode = std::getenv("EDEN_NX2_TENSOR");
+-            const char* const mode = forced_mode ? forced_mode : tensor ? "1" : nullptr;
++            // The Legend of Zelda: Ocarina of Time upscales its frame through such a network. With
++            // the plain upscale that replaces a rejected network, its movies stayed black on the
++            // PS5 (sound only), so its networks run through the native lowering below.
++            // EDEN_NX2_TENSOR=0 rejects them again.
++            const bool forced_off = forced_mode != nullptr && std::string_view{forced_mode} == "0";
++            const bool title_tensor = Settings::GetCurrentProgramID() == 0x0400486024DEC000ULL;
++            const char* const mode = forced_off    ? nullptr
++                                     : forced_mode ? forced_mode
++                                     : (tensor || title_tensor) ? "1"
++                                                                : nullptr;
+             if (!mode) return fail(index, "native matrix multiply (set EDEN_NX2_TENSOR to emulate)");
+             const u32 a = insn.Bits(24, 8), b = insn.Bits(32, 8), c = insn.Bits(64, 8);
+             const u32 shape = insn.words[2] & ~0xffU;
