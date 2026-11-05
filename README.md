@@ -94,6 +94,17 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0021 | Donkey Kong Bananza's terrain counters (heydemoura/EglantinePS5 patch `0008`) |
 | 0022 | Direct guest reads of pages the GPU never wrote (from heydemoura/EglantinePS5 patch `0006`) |
 | 0023 | Diagnostic headers the frontend's reports use (heydemoura/EglantinePS5 patch `0004`) |
+| 0024 | Room in the GPU command queue for a burst of sparse tile maps, which froze Mario Kart World; each queue entry keeps fewer list entries in place, so the queue stays small |
+| 0025 | Oversized native vertex streams are clamped (MythosOfs/Orchid `d7267d7f13`, godpow) |
+| 0026 | Syncpoint increments with an id past the table are dropped (Orchid `bb9bdb1ed3`) |
+| 0027 | Switch 2 scale, chat and camera commands are answered (Orchid `96dd790493`) |
+| 0028 | Module names of Switch 2 programs (Orchid `0c92e5dd0e`) |
+| 0029 | Scalar guest reads and writes split at 4 KiB device pages (Orchid `b841a347f2`) |
+| 0030 | Syncpoint actions run outside the guard (Orchid `aa266e4577`, from andrewleeog/Eglantine `9ef2dde1a`) |
+| 0032 | Tessellation pipelines the driver would refuse are skipped (Djihads80/Eglantine PR 426, kraibse) |
+| 0033 | Texture cache counts what host images really take (Orchid `86587ae279`, godpow) |
+| 0034 | Sparse images are backed whole when their tiles or layers cannot be set up (Orchid `64a5e4df86`) |
+| 0035 | Released video images return as end-of-stream frames after a movie ends (Orchid `73cbde2a3a`) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
