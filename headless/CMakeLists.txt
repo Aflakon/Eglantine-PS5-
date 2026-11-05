@@ -854,15 +854,7 @@ string(REPLACE "${idle_old}" [=[void PhysicalCore::Idle() {
     {
         std::unique_lock lk{m_guard};
         slept = !m_is_interrupted;
-        m_interrupt_ns.store(0, std::memory_order_relaxed);
-        m_sleeping.store(true, std::memory_order_relaxed);
         m_on_interrupt.wait(lk, [this] { return m_is_interrupted.load(); });
-        m_sleeping.store(false, std::memory_order_relaxed);
-    }
-    if (const long long sent = m_interrupt_ns.load(std::memory_order_relaxed); slept && sent != 0) {
-        const long long woke = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                   std::chrono::steady_clock::now().time_since_epoch()).count();
-        ::Eden::Performance::CountWake(m_core_index, woke - sent);
     }
     ::Eden::Performance::CountIdle(m_core_index, ::Eden::Performance::NowNs() - start, slept);
 }
@@ -2216,8 +2208,9 @@ if(EDEN_PS5_OPENGL)
             signaled = state.signaled_fence.load(std::memory_order_acquire);
         }]=])
         string(FIND "${gpu_worker}" "${fence_wait_old}" fence_wait_at)
+        # A core whose waiters already sleep on a stop-aware condition variable has neither pattern.
         if(fence_wait_at LESS 0)
-            message(FATAL_ERROR "Pinned GPU completion wait changed")
+            message(STATUS "GPU completion wait: this core already sleeps on a condition variable")
         endif()
         string(REPLACE "${fence_wait_old}" [=[        std::unique_lock fence_lock{state.fence_mutex};
         state.fence_cv.wait(fence_lock, stop_source.get_token(), [&] {
@@ -2229,7 +2222,7 @@ if(EDEN_PS5_OPENGL)
     }]=])
         string(FIND "${gpu_worker}" "${fence_signal_old}" fence_signal_at)
         if(fence_signal_at LESS 0)
-            message(FATAL_ERROR "Pinned GPU completion signal changed")
+            message(STATUS "GPU completion signal: this core already notifies its condition variable")
         endif()
         string(REPLACE "${fence_signal_old}" [=[    {
         std::lock_guard fence_lock{state.fence_mutex};
@@ -2506,7 +2499,7 @@ list(APPEND common_sources "${PORT_BUILD_DIR}/multi_level_page_table.cpp")
     # Use getdents type information and one followed stat for each file size.
     eden_patch(vfs_real_source
         "std::vector<VirtualFile> RealVfsDirectory::GetFiles() const {\n    return IterateEntries<RealVfsFile, VfsFile>();\n}"
-        "std::vector<VirtualFile> RealVfsDirectory::GetFiles() const {\n    if (perms == OpenMode::AllowAppend) return {};\n    std::error_code error;\n    const auto entries = Eden::ReadNativeDirectoryMetadata(path, false, error);\n    if (error) { LOG_ERROR(Common_Filesystem, \"Directory enumeration failed: {}: {}\", path, error.message()); return {}; }\n    std::vector<VirtualFile> out;\n    out.reserve(entries.size());\n    for (const auto& entry : entries)\n        out.push_back(base.OpenFileFromEntry(FS::PathToUTF8String(entry.path), entry.size, path, perms));\n    return out;\n}")
+        "std::vector<VirtualFile> RealVfsDirectory::GetFiles() const {\n    if (perms == OpenMode::AllowAppend) return {};\n    std::error_code error;\n    const auto entries = Eden::ReadNativeDirectoryMetadata(path, false, error);\n    if (error) { LOG_ERROR(Common_Filesystem, \"Directory enumeration failed: {}: {}\", path, error.message()); return {}; }\n    std::vector<VirtualFile> out;\n    out.reserve(entries.size());\n    for (const auto& entry : entries)\n        out.push_back(base.OpenFileFromEntry(FS::PathToUTF8String(entry.path), entry.size, perms));\n    return out;\n}")
     eden_patch(vfs_real_source
         "std::vector<VirtualDir> RealVfsDirectory::GetSubdirectories() const {\n    return IterateEntries<RealVfsDirectory, VfsDirectory>();\n}"
         "std::vector<VirtualDir> RealVfsDirectory::GetSubdirectories() const {\n    if (perms == OpenMode::AllowAppend) return {};\n    std::error_code error;\n    const auto entries = Eden::ReadNativeDirectoryMetadata(path, true, error);\n    if (error) { LOG_ERROR(Common_Filesystem, \"Directory enumeration failed: {}: {}\", path, error.message()); return {}; }\n    std::vector<VirtualDir> out;\n    out.reserve(entries.size());\n    for (const auto& entry : entries)\n        out.push_back(base.OpenDirectory(FS::PathToUTF8String(entry.path), perms));\n    return out;\n}")

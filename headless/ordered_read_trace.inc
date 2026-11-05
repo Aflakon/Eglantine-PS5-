@@ -49,7 +49,7 @@ static void Export(Capture& c, const char* folder = "/data/eglantineps5/logs") {
             const std::uint64_t values[]{r.trace_index,r.start_frame,r.end_frame,r.request_ns,
                 r.cpu_return,r.core,r.caller,r.original_address,r.original_size,r.address,r.size,
                 r.fence,r.completed_fence_at_request,r.published_sequence,r.requested_generation,
-                r.backend_generation,r.checked_generation,r.checked_sequence,e.area.completed_generation,
+                r.backend_generation,r.checked_generation,r.checked_sequence,u64{0},
                 r.return_generation,r.before_lock,r.enqueued,r.front_popped,r.backend_start,
                 r.area_end,r.flush_end,r.wait_begin,r.wait_end,r.dirty_mask,r.pending_channels,
                 r.split,e.area.start_address,e.area.end_address,r.scalar_valid,r.value_before,r.value_after,
