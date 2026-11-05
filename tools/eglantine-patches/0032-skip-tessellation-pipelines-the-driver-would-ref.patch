@@ -1,0 +1,110 @@
+diff --git a/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp b/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp
+index 76a564aae9..d385db6004 100644
+--- a/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp
++++ b/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp
+@@ -124,7 +124,8 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
+     tessellation_spacing.Assign(static_cast<u32>(regs.tessellation.params.spacing.Value()));
+     tessellation_clockwise.Assign(regs.tessellation.params.output_primitives.Value() ==
+                                   Maxwell::Tessellation::OutputPrimitives::Triangles_CW);
+-    patch_control_points_minus_one.Assign(regs.patch_vertices - 1);
++    // The field holds 1..32 points; an unset (0) or oversized register would wrap or truncate.
++    patch_control_points_minus_one.Assign(std::clamp<u32>(regs.patch_vertices, 1, 32) - 1);
+     const bool can_collapse_topology_class =
+         features.has_extended_dynamic_state && features.has_extended_dynamic_state_2;
+     topology.Assign(can_collapse_topology_class
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index d3ffc661c2..0710bea6bc 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -330,7 +330,12 @@ GraphicsPipeline::GraphicsPipeline(
+         try {
+             MakePipeline(render_pass);
+         } catch (const vk::Exception& exception) {
+-            LOG_CRITICAL(Render_Vulkan, "Graphics pipeline build failed: {}", exception.what());
++            LOG_CRITICAL(Render_Vulkan,
++                         "Graphics pipeline build failed: {} (stages: tcs={} tes={} geom={}, "
++                         "patch control points {}, device max patch size {})",
++                         exception.what(), spv_modules[1] ? 1 : 0, spv_modules[2] ? 1 : 0,
++                         spv_modules[3] ? 1 : 0, key.state.patch_control_points_minus_one.Value() + 1,
++                         device.GetMaxTessellationPatchSize());
+             std::scoped_lock lock{build_mutex};
+             is_built = true;
+             build_condvar.notify_one();
+@@ -860,7 +865,8 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
+         .pNext = nullptr,
+         .flags = 0,
+-        .patchControlPoints = key.state.patch_control_points_minus_one.Value() + 1,
++        .patchControlPoints = std::min(key.state.patch_control_points_minus_one.Value() + 1,
++                                       device.GetMaxTessellationPatchSize()),
+     };
+     std::array<VkViewportSwizzleNV, Maxwell::NumViewports> swizzles;
+     std::ranges::transform(key.state.viewport_swizzles, swizzles.begin(), UnpackViewportSwizzle);
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index 18aa74b29e..de187fe751 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -1165,6 +1165,42 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+             layer_source_program = &programs[index];
+         }
+     }
++    // A tessellation pipeline the driver would refuse is skipped like a missing mesh pipeline:
++    // the draw is dropped (see the pipeline check in the rasterizer) instead of failing the build.
++    {
++        const Shader::IR::Program* control{};
++        const Shader::IR::Program* evaluation{};
++        for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
++            if (key.unique_hashes[index] == 0) {
++                continue;
++            }
++            if (programs[index].stage == Shader::Stage::TessellationControl) {
++                control = &programs[index];
++            } else if (programs[index].stage == Shader::Stage::TessellationEval) {
++                evaluation = &programs[index];
++            }
++        }
++        if (control != nullptr || evaluation != nullptr) {
++            const u32 max_patch_size = device.GetMaxTessellationPatchSize();
++            const char* reason = nullptr;
++            if (!device.IsTessellationSupported()) {
++                reason = "the device has no tessellation shaders";
++            } else if (control == nullptr || evaluation == nullptr) {
++                reason = "it has only one of the control and evaluation stages";
++            } else if (control->invocations == 0 || control->invocations > max_patch_size) {
++                reason = "the control shader's output vertex count is out of range";
++            }
++            if (reason != nullptr) {
++                LOG_WARNING(Render_Vulkan,
++                            "Skipping tessellation pipeline: {} (tcs={} tes={}, tcs output "
++                            "vertices {}, patch control points {}, device max patch size {})",
++                            reason, control != nullptr, evaluation != nullptr,
++                            control != nullptr ? control->invocations : 0,
++                            key.state.patch_control_points_minus_one.Value() + 1, max_patch_size);
++                return nullptr;
++            }
++        }
++    }
+     std::array<const Shader::Info*, Maxwell::MaxShaderStage> infos{};
+     std::array<vk::ShaderModule, Maxwell::MaxShaderStage> modules;
+ 
+diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
+index f3f9209c99..9cbe7e0339 100644
+--- a/src/video_core/vulkan_common/vulkan_device.h
++++ b/src/video_core/vulkan_common/vulkan_device.h
+@@ -663,6 +663,16 @@ FN_MAX_LIMIT_LIST
+         return extensions.shader_quad_control && features.shader_quad_control.shaderQuadControl;
+     }
+ 
++    /// Returns true if the device can build tessellation pipelines.
++    bool IsTessellationSupported() const {
++        return features.features.tessellationShader;
++    }
++
++    /// Returns the largest patch size (control points, and TCS output vertices) a pipeline allows.
++    u32 GetMaxTessellationPatchSize() const {
++        return properties.properties.limits.maxTessellationPatchSize;
++    }
++
+     /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
+     bool IsExtMeshShaderSupported() const {
+         return extensions.mesh_shader && features.mesh_shader.taskShader &&

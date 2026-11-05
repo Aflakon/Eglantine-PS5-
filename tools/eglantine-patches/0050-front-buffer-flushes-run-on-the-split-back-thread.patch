@@ -1,0 +1,59 @@
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index 39ebd8ba86..c2caf14d7e 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -661,8 +661,10 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
+     const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
+     if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
+                                      VideoCommon::CacheType::BufferCache)) {
+-        memory_manager.FlushRegion(first_page, end_page - first_page,
+-                                   VideoCommon::CacheType::BufferCache);
++        VideoCommon::GpuSplit::Get().RunOnBack(
++            [memory = &memory_manager, first_page, size = end_page - first_page] {
++                memory->FlushRegion(first_page, size, VideoCommon::CacheType::BufferCache);
++            });
+     }
+     if (rasterizer == nullptr) {
+         return;
+diff --git a/src/video_core/engines/puller.cpp b/src/video_core/engines/puller.cpp
+index 5ccdfb38c1..4f2c4ee3c0 100644
+--- a/src/video_core/engines/puller.cpp
++++ b/src/video_core/engines/puller.cpp
+@@ -38,8 +38,10 @@ u32 ReadSemaphoreWord(DmaPusher& dma_pusher, GPUVAddr address) {
+     if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
+         device && dma_pusher.rasterizer->MustFlushRegion(*device, sizeof(u32),
+                                                           VideoCommon::CacheType::BufferCache)) {
+-        dma_pusher.rasterizer->FlushRegion(*device, sizeof(u32),
+-                                           VideoCommon::CacheType::BufferCache);
++        VideoCommon::GpuSplit::Get().RunOnBack(
++            [rasterizer = dma_pusher.rasterizer, device = *device] {
++                rasterizer->FlushRegion(device, sizeof(u32), VideoCommon::CacheType::BufferCache);
++            });
+     }
+     return dma_pusher.memory_manager.Read<u32>(address);
+ }
+diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
+index 200dddc81e..5b1d0ebcac 100644
+--- a/src/video_core/gpu_split.h
++++ b/src/video_core/gpu_split.h
+@@ -109,6 +109,20 @@ public:
+         Commit(2 + payload);
+     }
+     void DeferFunction(std::function<void()>&& func);
++    /// Runs `func` on the back and waits for it, or at once on the back or without the split: for
++    /// work on back-owned state, such as a buffer cache flush that records a download into the
++    /// Vulkan scheduler. A drained back still submits deferred work from its idle hook, so the
++    /// front must not record into the scheduler itself (zortos293/Lichii 12db3f599: Kirby Air
++    /// Riders crashed at its title in CommandChunk::Record).
++    template <typename Func>
++    void RunOnBack(const Func& func) {
++        if (on_back_thread || !active) {
++            func();
++            return;
++        }
++        Defer(func);
++        Drain();
++    }
+ 
+     /// EDEN_NX2_SPLIT_CHECK=1 (debug): reports, with its stack, a thread other than the back
+     /// using back-owned state (the Vulkan scheduler) while the back runs entries.

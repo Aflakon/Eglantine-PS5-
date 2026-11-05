@@ -1,0 +1,260 @@
+diff --git a/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp b/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp
+index fd3c80dc44..ac1cc593cb 100644
+--- a/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp
++++ b/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp
+@@ -242,9 +242,10 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
+     Nx2GpuMemoryRegistry::Get().RecordDeviceRange(cpu_address, size, device_address);
+     // On the GPU thread, like unmaps: a GMMU map takes the texture cache lock, and the callers hold
+     // nx2:gpu locks that the GPU thread takes under that lock (sparse blocks backed on write).
+-    system.GPU().MapInOrder([gmmu = gmmu.get(), gpu_address, device_address, size] {
+-        gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
+-    });
++    system.GPU().MapInOrder(
++        gpu_address, size, [gmmu = gmmu.get(), gpu_address, device_address, size] {
++            gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
++        });
+     LOG_DEBUG(Service_NVDRV, "Switch 2 GPU mapping {:#x}+{:#x} -> CPU {:#x}", gpu_address, size,
+               cpu_address);
+ }
+@@ -319,9 +320,10 @@ void nvhost_as_gpu::Nx2Sparse(u64 gpu_address, u64 size, bool create) {
+     }
+     nx2_sparse_ranges[gpu_address] = {size, device_address};
+     // On the GPU thread, as in Nx2Map.
+-    system.GPU().MapInOrder([gmmu = gmmu.get(), gpu_address, device_address, size] {
+-        gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
+-    });
++    system.GPU().MapInOrder(
++        gpu_address, size, [gmmu = gmmu.get(), gpu_address, device_address, size] {
++            gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
++        });
+     LOG_DEBUG(Service_NVDRV, "Switch 2 sparse region {:#x}+{:#x} -> device {:#x}", gpu_address,
+               size, device_address);
+ }
+@@ -361,12 +363,13 @@ void nvhost_as_gpu::Nx2SparseTile(u64 gpu_address, u64 cpu_address, u64 size) {
+     // whose contents are now what the game's memory holds there.
+     const DAddr device = device_address + (gpu_address - start);
+     auto& smmu = system.Host1x().MemoryManager();
+-    system.GPU().MapInOrder([&smmu, device, cpu_address, size, asid = session->asid] {
+-        smmu.Unmap(device, size);
+-        if (cpu_address != 0) {
+-            smmu.Map(device, cpu_address, size, asid, true);
+-        }
+-    });
++    system.GPU().MapInOrder(
++        gpu_address, size, [&smmu, device, cpu_address, size, asid = session->asid] {
++            smmu.Unmap(device, size);
++            if (cpu_address != 0) {
++                smmu.Map(device, cpu_address, size, asid, true);
++            }
++        });
+ }
+ 
+ void nvhost_as_gpu::OnClose(DeviceFD fd) {}
+diff --git a/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp b/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
+index 8c9689112a..433fff4151 100644
+--- a/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
++++ b/src/core/hle/service/nvdrv/devices/nvhost_gpu.cpp
+@@ -463,7 +463,18 @@ NvResult nvhost_gpu::SubmitGPFIFOImpl(IoctlSubmitGpfifo& params, Tegra::CommandL
+             const bool defer_empty =
+                 system.GetApplicationProcessProgramID() == 0x040074a01bf12000ULL;
+             size_t offset = 0;
+-            for (const auto& entry : entries.command_lists) {
++            for (u32 i = 0; i < entries.command_lists.size(); ++i) {
++                const auto& entry = entries.command_lists[i];
++                // GMMU maps run on the GPU thread (GPU::MapInOrder): an entry on addresses a
++                // queued map changes would copy as zeros (Pokopia's first lists). DmaPusher::Push
++                // copies it after the map instead.
++                const u64 bytes = static_cast<u64>(entry.size) * sizeof(u32);
++                if (system.GPU().IsMapPending(entry.addr, bytes)) {
++                    entries.submitted_offsets.push_back(static_cast<u32>(offset));
++                    entries.deferred_entries.push_back(i);
++                    offset += entry.size;
++                    continue;
++                }
+                 channel_state->memory_manager->ReadBlockUnsafe(
+                     entry.addr, entries.submitted_words.data() + offset, entry.size * sizeof(u32));
+                 const auto first = entries.submitted_words.begin() + offset;
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index dca0aa0169..39ebd8ba86 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -194,6 +194,9 @@ bool DmaPusher::Step() {
+                                (command_list.snapshot_suspensions & 1) == 0 &&
+                                command_list.snapshot_suspensions ==
+                                    suspensions.load(std::memory_order_acquire) &&
++                               !std::ranges::binary_search(
++                                   command_list.deferred_entries,
++                                   static_cast<u32>(dma_pushbuffer_subindex)) &&
+                                !gpu_written &&
+                                !(use_safe && memory_manager.IsMemoryDirty(dma_state.dma_get,
+                                                                           header.size * sizeof(u32)));
+@@ -557,6 +560,23 @@ void DmaPusher::RefreshSnapshot(CommandList& list, u64 now) {
+         memory_manager.ReadBlockUnsafe(entry.addr, list.submitted_words.data() + offset,
+                                        entry.size * sizeof(u32));
+     }
++    list.deferred_entries.clear();
++}
++
++void DmaPusher::RefreshDeferredEntries(CommandList& list) {
++    for (const u32 i : list.deferred_entries) {
++        if (i >= list.command_lists.size() || i >= list.submitted_offsets.size()) {
++            continue;
++        }
++        const CommandListHeader& entry = list.command_lists[i];
++        const u32 offset = list.submitted_offsets[i];
++        if (offset + entry.size > list.submitted_words.size()) {
++            continue;
++        }
++        memory_manager.ReadBlockUnsafe(entry.addr, list.submitted_words.data() + offset,
++                                       entry.size * sizeof(u32));
++    }
++    list.deferred_entries.clear();
+ }
+ 
+ bool DmaPusher::IsGpuWrittenCommands(GPUVAddr address, size_t size) {
+diff --git a/src/video_core/dma_pusher.h b/src/video_core/dma_pusher.h
+index 3e7a74f411..7b9320d3b9 100644
+--- a/src/video_core/dma_pusher.h
++++ b/src/video_core/dma_pusher.h
+@@ -125,6 +125,9 @@ struct CommandList final {
+     /// executed instead of the memory, which the game may already be refilling for a later frame.
+     std::vector<CommandHeader> submitted_words;
+     std::vector<u32> submitted_offsets;
++    /// Entries (ascending) not copied when submitted, because a GPU map still queued covers them:
++    /// DmaPusher::Push copies them after the map, and until then they read memory.
++    std::vector<u32> deferred_entries;
+     /// DmaPusher::suspensions when the words were copied. A list copied during a suspension, or
+     /// that waited behind one, reads memory instead: games write the commands it runs before they
+     /// release the acquire.
+@@ -157,9 +160,13 @@ public:
+     void Push(CommandList&& entries) {
+         // Copied during a suspension, or behind one: copy again now, unless still suspended.
+         const u64 now = suspensions.load(std::memory_order_acquire);
+-        if (ResnapshotEnabled() && !entries.submitted_offsets.empty() && (now & 1) == 0 &&
+-            entries.snapshot_suspensions != now) {
+-            RefreshSnapshot(entries, now);
++        if (!entries.submitted_offsets.empty() && (now & 1) == 0) {
++            if (ResnapshotEnabled() && entries.snapshot_suspensions != now) {
++                RefreshSnapshot(entries, now);
++            } else if (!entries.deferred_entries.empty()) {
++                // Behind a GPU map when submitted: the map has run by now (GPU::MapInOrder).
++                RefreshDeferredEntries(entries);
++            }
+         }
+         dma_pushbuffer.push_back(std::move(entries));
+     }
+@@ -208,6 +215,8 @@ public:
+     bool IsGpuWrittenCommands(GPUVAddr address, size_t size);
+     /// Copies the list's words from memory again, as of suspension count `now`.
+     void RefreshSnapshot(CommandList& list, u64 now);
++    /// Copies the list's deferred entries (CommandList::deferred_entries) from memory.
++    void RefreshDeferredEntries(CommandList& list);
+ 
+     /// EDEN_NX2_RESNAPSHOT=0 turns snapshot refreshes off.
+     static bool ResnapshotEnabled() {
+diff --git a/src/video_core/gpu.cpp b/src/video_core/gpu.cpp
+index dfc07dbc57..28d133c982 100644
+--- a/src/video_core/gpu.cpp
++++ b/src/video_core/gpu.cpp
+@@ -4,13 +4,16 @@
+ // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <algorithm>
+ #include <array>
+ #include <atomic>
+ #include <chrono>
+ #include <condition_variable>
+ #include <list>
+ #include <memory>
++#include <mutex>
+ #include <utility>
++#include <vector>
+ 
+ #include "common/assert.h"
+ #include "common/settings.h"
+@@ -216,8 +219,32 @@ struct GPU::Impl {
+         gpu_thread.Run(std::move(func), is_async);
+     }
+ 
+-    void MapInOrder(std::function<void()>&& func) {
+-        gpu_thread.Run(std::move(func), is_async, true);
++    void MapInOrder(GPUVAddr gpu_addr, u64 size, std::function<void()>&& func) {
++        u64 id;
++        {
++            std::scoped_lock lock{pending_maps_mutex};
++            id = ++last_pending_map;
++            pending_maps.push_back({id, gpu_addr, gpu_addr + size});
++            pending_map_count.store(pending_maps.size(), std::memory_order_release);
++        }
++        gpu_thread.Run(
++            [this, id, func = std::move(func)] {
++                func();
++                std::scoped_lock lock{pending_maps_mutex};
++                std::erase_if(pending_maps, [id](const PendingMap& map) { return map.id == id; });
++                pending_map_count.store(pending_maps.size(), std::memory_order_release);
++            },
++            is_async, true);
++    }
++
++    bool IsMapPending(GPUVAddr gpu_addr, u64 size) const {
++        if (pending_map_count.load(std::memory_order_acquire) == 0 || size == 0) {
++            return false;
++        }
++        std::scoped_lock lock{pending_maps_mutex};
++        return std::ranges::any_of(pending_maps, [&](const PendingMap& map) {
++            return gpu_addr < map.end && map.begin < gpu_addr + size;
++        });
+     }
+ 
+     /// Notify rasterizer that any caches of the specified region should be flushed to Switch memory
+@@ -364,6 +391,17 @@ struct GPU::Impl {
+     std::list<std::function<void()>> sync_requests;
+     std::atomic<u64> current_sync_fence{};
+     u64 last_sync_fence{};
++
++    // Maps queued by MapInOrder and not run yet, by the GPU addresses they change.
++    struct PendingMap {
++        u64 id;
++        GPUVAddr begin;
++        GPUVAddr end;
++    };
++    mutable std::mutex pending_maps_mutex;
++    std::vector<PendingMap> pending_maps;
++    u64 last_pending_map{};
++    std::atomic<size_t> pending_map_count{};
+     std::mutex sync_request_mutex;
+     std::condition_variable sync_request_cv;
+ 
+@@ -565,8 +603,12 @@ void GPU::RunInOrder(std::function<void()>&& func) {
+     impl->RunInOrder(std::move(func));
+ }
+ 
+-void GPU::MapInOrder(std::function<void()>&& func) {
+-    impl->MapInOrder(std::move(func));
++void GPU::MapInOrder(GPUVAddr gpu_addr, u64 size, std::function<void()>&& func) {
++    impl->MapInOrder(gpu_addr, size, std::move(func));
++}
++
++bool GPU::IsMapPending(GPUVAddr gpu_addr, u64 size) const {
++    return impl->IsMapPending(gpu_addr, size);
+ }
+ 
+ void GPU::InvalidateRegion(DAddr addr, u64 size, bool preserve_gpu_writes) {
+diff --git a/src/video_core/gpu.h b/src/video_core/gpu.h
+index d37dfa5990..05c9e13487 100644
+--- a/src/video_core/gpu.h
++++ b/src/video_core/gpu.h
+@@ -259,7 +259,11 @@ public:
+ 
+     /// RunInOrder for GPU memory maps: also done before the GPU thread reads the command lists
+     /// submitted later (with the GPU split, on its front rather than its back).
+-    void MapInOrder(std::function<void()>&& func);
++    /// [gpu_addr, gpu_addr + size) is the range of GPU addresses the map changes.
++    void MapInOrder(GPUVAddr gpu_addr, u64 size, std::function<void()>&& func);
++
++    /// Whether a MapInOrder over part of [gpu_addr, gpu_addr + size) is queued and not done yet.
++    [[nodiscard]] bool IsMapPending(GPUVAddr gpu_addr, u64 size) const;
+ 
+     /// Notify rasterizer that any caches of the specified region should be invalidated
+     void InvalidateRegion(DAddr addr, u64 size, bool preserve_gpu_writes = false);

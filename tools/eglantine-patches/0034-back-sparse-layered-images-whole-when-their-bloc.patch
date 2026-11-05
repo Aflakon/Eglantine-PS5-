@@ -1,0 +1,83 @@
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+index 6501a2c15b..ef73aabba9 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -2623,6 +2623,23 @@ void TextureCacheRuntime::TickFrame() {
+     });
+ }
+ 
++namespace {
++[[nodiscard]] vk::Image MakeHostImage(TextureCacheRuntime& runtime, const ImageInfo& info,
++                                      u32 host_level_offset, GPUVAddr gpu_addr, bool backed) {
++    const Device& device = runtime.device;
++    const bool sparse_tiles = !backed && UsesSparseTiles(device, info, gpu_addr);
++    return MakeImage(
++        device, runtime.memory_allocator, TrimmedHostInfo(device, info, host_level_offset),
++        IsHugeAstcArray(device, info)   ? std::span<const VkFormat>{HugeAstcViewFormats}
++        : IsOpaqueBc1Astc(device, info) ? std::span<const VkFormat>{OpaqueAstcViewFormats}
++                                        : runtime.ViewFormats(info.format),
++        AstcHostFormat(device, info),
++        !backed && (UsesSparseLayers(device, info, gpu_addr) || sparse_tiles ||
++                    IsUnwrittenSparse(device, info, gpu_addr)),
++        sparse_tiles && SparseTilesModeOf(device) == SparseTilesMode::Aliased);
++}
++} // Anonymous namespace
++
+ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu_addr_,
+              VAddr cpu_addr_)
+     : VideoCommon::ImageBase(info_, gpu_addr_, cpu_addr_), scheduler{&runtime_.scheduler},
+@@ -2646,10 +2663,34 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
+         const ImageInfo host_info = TrimmedHostInfo(runtime_.device, info, host_level_offset);
+         const u64 texels = u64{host_info.size.width} * host_info.size.height *
+                            host_info.size.depth * static_cast<u64>(host_info.resources.layers);
+-        if (UsesSparseLayers(runtime_.device, info, gpu_addr_) && InitSparseLayers()) {
++        const bool layered_sparse = UsesSparseLayers(runtime_.device, info, gpu_addr_);
++        if (layered_sparse && InitSparseLayers()) {
+             flags |= VideoCommon::ImageFlagBits::SparseLayers;
+-        } else if (UsesSparseTiles(runtime_.device, info, gpu_addr_) && InitSparseTiles()) {
+-            flags |= VideoCommon::ImageFlagBits::SparseTiles;
++        } else if (layered_sparse && !IsUnwrittenSparse(runtime_.device, info, gpu_addr_)) {
++            // Layers that could not be set up (a sparse block the image can't be bound by) would
++            // stay unbound and sample black: back the image whole, as for sparse tiles.
++            LOG_WARNING(Render_Vulkan, "Sparse layered image {:#x}: backing it whole", gpu_addr_);
++            original_image = MakeHostImage(runtime_, info, host_level_offset, gpu_addr_, true);
++            if (!original_image.IsUnbacked()) {
++                flags &= ~VideoCommon::ImageFlagBits::Unbacked;
++            } else if (texels <= (u64{1} << 28)) {
++                flags |= VideoCommon::ImageFlagBits::UnwrittenSparse;
++            }
++        } else if (UsesSparseTiles(runtime_.device, info, gpu_addr_)) {
++            if (InitSparseTiles()) {
++                flags |= VideoCommon::ImageFlagBits::SparseTiles;
++            } else {
++                // An image whose tiles could not be set up is backed whole like any other (the
++                // aliased mode's drivers can't sample unbound memory).
++                LOG_WARNING(Render_Vulkan, "Sparse tiled image {:#x}: backing it whole",
++                            gpu_addr_);
++                original_image = MakeHostImage(runtime_, info, host_level_offset, gpu_addr_, true);
++                if (!original_image.IsUnbacked()) {
++                    flags &= ~VideoCommon::ImageFlagBits::Unbacked;
++                } else if (texels <= (u64{1} << 28)) {
++                    flags |= VideoCommon::ImageFlagBits::UnwrittenSparse;
++                }
++            }
+         } else if (texels <= (u64{1} << 28)) {
+             // Not too big to back (see MemoryAllocator::CreateImage): unbacked because nothing
+             // was written there yet, so the first write gets it replaced.
+@@ -3177,6 +3218,16 @@ bool Image::InitSparseLayers() {
+         s.tile_width *= block_width;
+         s.tile_height *= block_height;
+     }
++    // A block that is not one sparse page of the image can't be bound by (AMD reported 65549 x
++    // 339860304 for title 1's RGBA8 terrain arrays on an RX 9070 XT).
++    if (s.tile_width < block_width || s.tile_height < block_height ||
++        u64{s.tile_width / block_width} * (s.tile_height / block_height) * block_bytes != tile) {
++        LOG_WARNING(Render_Vulkan,
++                    "Sparse layered image {:#x}: driver block {}x{} is not a {} byte page; not "
++                    "using sparse layers",
++                    gpu_addr, granularity.width, granularity.height, tile);
++        return false;
++    }
+     const u32 tail_lod = (std::min)(it->imageMipTailFirstLod, s.levels);
+     VkDeviceSize bytes = 0;
+     for (u32 level = 0; level < tail_lod; ++level) {

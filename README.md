@@ -31,17 +31,20 @@ A PS5 homebrew build that stacks three layers, always updated in this order:
 | 2 | **PS5 frontend** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (launcher, Vulkan/RADV port, packaging), built on BlackBearReloaded's ProsperoEden | This repository's full history is that project's; we rebase on its `main` and keep our changes on top. |
 | 3 | **NUP support** | `.nup` is Eglantine's single-file package (base game + update + DLC) | The library lists `.nup` files, runs them, and can **pack a game folder into a NUP** on the console. |
 
-Current core pin: **Eglantine `3081c8e`** (`nx2`, `build-219`, 2026-11-04).
+Current core pin: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 2026-11-05).
 
 ## Status (honest version)
 
 | Item | State |
 |---|---|
-| Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus. |
+| Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus; other users run it on **11.40** and **11.60**. |
 | Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Runs on the current build (core `3081c8e`) with its update and DLC: **Docked, 1x resolution, 10-25 fps depending on the zone, about 15 in large open areas, 30 fps in cutscenes**. A new zone can show purple the first time it is entered; in one test the game's own "reset terrain" option cleared it. |
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
 | Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
 | Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
+| Mario Kart World (Switch 2) | Reaches its menu at about 20-25 fps (v1.219.014; task and mesh draws are off because they hang the PS5's GPU). It runs out of graphics memory after one or two minutes, and sometimes stops at 98% while loading: close the app and try again. |
+| The Legend of Zelda: Ocarina of Time (Switch 2) | Title screen and sound work. On v1.219.014 the picture stayed black during its movies and the game stopped after the intro; v1.219.015 carries fixes for both that have not been tried on a console yet. |
+| Donkey Kong Bananza on v1.219.014 | Crashed when many objects broke at once; v1.219.015 has the fix, not yet tried on a console. |
 | Other Switch 2 titles | Some fail early. Nothing is promised beyond what is listed here. |
 | Frame generation (Lossless Scaling) | Compiled in, but pointless at a 20 fps base. |
 
@@ -89,6 +92,39 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0016 | Draws that sample their own colour target read a copy (Orchid `a49c81063`, MythosOfs) |
 | 0017 | Page checks skipped for buffer ranges with no new CPU writes (Orchid `a3be6e11b`, `5ffe9eb53`, `4476c8671`, `2e0b577bb`; from monteger8/Eglantine-DKB, Claude for adamd) |
 | 0018 | GPU split: wakes a back thread that stayed parked (Orchid `1e4e0e82b`, from godpow/Eglantine, godpow) |
+| 0019 | Log a guest thread that waits over 5 s for the GPU thread |
+| 0020 | Log a kernel call that refuses an enum value (games abort on it with 2001-0120) |
+| 0021 | Donkey Kong Bananza's terrain counters (heydemoura/EglantinePS5 patch `0008`) |
+| 0022 | Direct guest reads of pages the GPU never wrote (from heydemoura/EglantinePS5 patch `0006`) |
+| 0023 | Diagnostic headers the frontend's reports use (heydemoura/EglantinePS5 patch `0004`) |
+| 0024 | Room in the GPU command queue for a burst of sparse tile maps, which froze Mario Kart World; each queue entry keeps fewer list entries in place, so the queue stays small |
+| 0025 | Oversized native vertex streams are clamped (MythosOfs/Orchid `d7267d7f13`, godpow) |
+| 0026 | Syncpoint increments with an id past the table are dropped (Orchid `bb9bdb1ed3`) |
+| 0027 | Switch 2 scale, chat and camera commands are answered (Orchid `96dd790493`) |
+| 0028 | Module names of Switch 2 programs (Orchid `0c92e5dd0e`) |
+| 0029 | Scalar guest reads and writes split at 4 KiB device pages (Orchid `b841a347f2`) |
+| 0030 | Syncpoint actions run outside the guard (Orchid `aa266e4577`, from andrewleeog/Eglantine `9ef2dde1a`) |
+| 0032 | Tessellation pipelines the driver would refuse are skipped (Djihads80/Eglantine PR 426, kraibse) |
+| 0033 | Texture cache counts what host images really take (Orchid `86587ae279`, godpow) |
+| 0034 | Sparse images are backed whole when their tiles or layers cannot be set up (Orchid `64a5e4df86`) |
+| 0035 | Released video images return as end-of-stream frames after a movie ends (Orchid `73cbde2a3a`) |
+| 0036 | Native lowering of the HMMA matrix instruction, far less shader code (heydemoura/EglantinePS5 patch `0013`, adapted to this core) |
+| 0037 | Controller callbacks are registered once the applet resource exists: a motion sample during boot crashed the app |
+| 0038 | Task and mesh stages get the push constant range (Orchid `faa12fdbb2`, from Zortos and Eglantine PR 472) |
+| 0039 | Reused GPU memory ranges are mapped again when their pages changed (Aubépine `92fe737e62`, from Purebuilt/AMDEGL `f6fba4f`) |
+| 0040 | The syncpoint page acknowledges requests against values read after them (jpasqui `04f849c9bb`, without its trace) |
+| 0041 | The GPU thread wakes for new submissions while channels wait on semaphores (Orchid `b15e4257b5`) |
+| 0042 | Each memory manager's reference counts are sized to its own region (Orchid `d47bb55f34`, from exploitizm) |
+| 0043 | Syncpoint actions are identified by id, so a late cancel cannot remove a newer one (Orchid `8837a265cc`, from Zortos and Eglantine PR 472; tests left out) |
+| 0044 | The Legend of Zelda: Ocarina of Time's native programs and upscale stand-in (Eglantine PR 614, from A-Man-With-A-Plan-dev) |
+| 0045 | Ocarina of Time's GPU-only regions are backed whole (Aubépine `24b7b61718`, adapted) |
+| 0046 | Mario Kart World runs without task and mesh draws, which hang the PS5's GPU |
+| 0047 | Native compute storage buffers sized from their descriptors outside DLSS passes, far fewer readbacks; Mario Kart World's present pacing (Eglantine PR 609) |
+| 0048 | Command lists submitted behind a queued GPU map are copied after the map, not as zeros (Eglantine PR 543, merged with this core's empty-list handling) |
+| 0049 | Fence releases from the puller run on the split GPU thread's back thread (Aubépine `7e20d36e9e`, after Lichii #70: Ocarina of Time stopped after its intro) |
+| 0050 | Buffer flushes the front GPU thread needs run on the back thread, which owns the Vulkan scheduler (Aubépine `4d3b54834e`, after Lichii `12db3f599`; Donkey Kong Bananza crashed in `CopyBuffer`, Eglantine issue 636) |
+| 0051 | Ocarina of Time's upscaling networks run through the native HMMA lowering instead of the plain upscale stand-in (its movies were black); `EDEN_NX2_TENSOR=0` turns this off |
+| 0052 | Multiplies by 0 and 1 are folded so Ocarina of Time's sky ambient finds its buffer; pipeline cache versions bumped (Orchid `636c5fb385`) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
@@ -120,17 +156,24 @@ Una build homebrew para PS5 que apila tres capas, siempre actualizadas en este o
 | 2 | **Frontend de PS5** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (lanzador, port de Vulkan/RADV, empaquetado), basado en ProsperoEden de BlackBearReloaded | El historial de este repo es el de ese proyecto; rebaseamos sobre su `main` y mantenemos nuestros cambios encima. |
 | 3 | **Soporte NUP** | `.nup` es el paquete de un solo fichero de Eglantine (juego base + update + DLC) | La biblioteca lista y ejecuta `.nup` y puede **empaquetar una carpeta de juego en un NUP** en la propia consola. |
 
-Core actual: **Eglantine `3081c8e`** (`nx2`, `build-219`, 4-nov-2026).
+Core actual: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 5-nov-2026).
+
+A Switch 2 game (title IDs that start with `0400`) starts from the emulator core's own defaults for its games instead of the general values: **Faster GPU emulation** on and **Reactive flushing** off. Without them the core's second GPU thread stays off and every GPU fence waits for the console's GPU; Mario Kart World's title screen ran at about 11 FPS with the general defaults and about 24 FPS with these (see [docs/MKW-TITLE-FPS.md](docs/MKW-TITLE-FPS.md)). The game's own values, set in the Library, still win.
+
+A game can have its own values: in its settings, **Performance** (see [Settings per game](#settings-per-game)). In the settings file, `"performance"` at the top level is what the switches set, and one inside a game's entry under `"games"` is that game's, whose values go first:
 
 ## Estado (versión honesta)
 
 | Punto | Estado |
 |---|---|
-| Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus. |
+| Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus; otros usuarios la usan en **11.40** y **11.60**. |
 | Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Funciona con la build actual (core `3081c8e`) con su update y su DLC: **modo TV, resolución 1x, 10-25 fps según la zona, unos 15 en zonas abiertas grandes, 30 fps en cinemáticas**. Una zona nueva puede verse morada la primera vez que se entra; en una prueba, la opción del juego «resetear terreno» lo arregló. |
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
 | Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
 | NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
+| Mario Kart World (Switch 2) | Llega a su menú a unos 20-25 fps (v1.219.014; los dibujos task y mesh están desactivados porque cuelgan la GPU de la PS5). Se queda sin memoria gráfica al cabo de uno o dos minutos, y a veces se para al 98 % de la carga: cierra la app y vuelve a intentarlo. |
+| The Legend of Zelda: Ocarina of Time (Switch 2) | La pantalla de título y el sonido funcionan. En la v1.219.014 la imagen se quedaba en negro durante sus vídeos y el juego se paraba tras la intro; la v1.219.015 lleva arreglos para ambas cosas que aún no se han probado en una consola. |
+| Donkey Kong Bananza en la v1.219.014 | Se cerraba al romperse muchos objetos a la vez; la v1.219.015 lleva el arreglo, aún sin probar en una consola. |
 | Otros juegos de Switch 2 | Algunos fallan pronto. No prometemos nada más allá de lo que aparece aquí. |
 | Generación de fotogramas (Lossless Scaling) | Incluida, pero sin sentido con una base de 20 fps. |
 

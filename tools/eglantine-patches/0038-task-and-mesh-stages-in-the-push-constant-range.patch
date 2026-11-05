@@ -1,0 +1,118 @@
+diff --git a/src/video_core/renderer_vulkan/pipeline_helper.h b/src/video_core/renderer_vulkan/pipeline_helper.h
+index 07de25f18f..6958a64d98 100644
+--- a/src/video_core/renderer_vulkan/pipeline_helper.h
++++ b/src/video_core/renderer_vulkan/pipeline_helper.h
+@@ -248,7 +248,11 @@ public:
+         const u32 size_offset = is_compute ? sizeof(RescalingLayout::down_factor) : 0u;
+         const VkPushConstantRange range{
+             .stageFlags = static_cast<VkShaderStageFlags>(
+-                is_compute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_ALL_GRAPHICS),
++                is_compute ? VK_SHADER_STAGE_COMPUTE_BIT
++                           : (uses_mesh ? VK_SHADER_STAGE_ALL_GRAPHICS |
++                                              VK_SHADER_STAGE_TASK_BIT_EXT |
++                                              VK_SHADER_STAGE_MESH_BIT_EXT
++                                        : VK_SHADER_STAGE_ALL_GRAPHICS)),
+             .offset = 0,
+             .size = static_cast<u32>(sizeof(RescalingLayout)) - size_offset +
+                     static_cast<u32>(sizeof(RenderAreaLayout)),
+@@ -266,6 +270,7 @@ public:
+ 
+     void Add(const Shader::Info& info, VkShaderStageFlags stage) {
+         is_compute |= (stage & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
++        uses_mesh |= (stage & (VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) != 0;
+ 
+         Add(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, stage, info.constant_buffer_descriptors);
+         Add(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stage, info.storage_buffers_descriptors);
+@@ -303,6 +308,7 @@ private:
+ 
+     const Device* device{};
+     bool is_compute{};
++    bool uses_mesh{};
+     boost::container::small_vector<VkDescriptorSetLayoutBinding, 32> bindings;
+     boost::container::small_vector<VkDescriptorUpdateTemplateEntry, 32> entries;
+     u32 binding{};
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index 0710bea6bc..e1680ac23c 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -690,7 +690,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+         });
+     }
+     const bool is_rescaling{texture_cache.IsRescaling()};
+-    const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling)};
++    const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
+     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
+     const bool bind_descriptor_buffer{
+         descriptor_set_layout && uses_descriptor_buffer &&
+@@ -730,20 +730,22 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+             }
+             cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline);
+         }
+-        cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
+-                             RESCALING_LAYOUT_WORDS_OFFSET, sizeof(rescaling_data),
+-                             rescaling_data.data());
++        const VkShaderStageFlags push_stages =
++            IsMeshPipeline() ? VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT |
++                                   VK_SHADER_STAGE_MESH_BIT_EXT
++                             : VK_SHADER_STAGE_ALL_GRAPHICS;
++        cmdbuf.PushConstants(*pipeline_layout, push_stages, RESCALING_LAYOUT_WORDS_OFFSET,
++                             sizeof(rescaling_data), rescaling_data.data());
+         if (update_rescaling) {
+             const f32 config_down_factor{Settings::values.resolution_info.down_factor};
+             const f32 scale_down_factor{is_rescaling ? config_down_factor : 1.0f};
+-            cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
++            cmdbuf.PushConstants(*pipeline_layout, push_stages,
+                                  RESCALING_LAYOUT_DOWN_FACTOR_OFFSET, sizeof(scale_down_factor),
+                                  &scale_down_factor);
+         }
+         if (uses_render_area) {
+-            cmdbuf.PushConstants(*pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
+-                                 RENDERAREA_LAYOUT_OFFSET, sizeof(render_area_data),
+-                                 &render_area_data);
++            cmdbuf.PushConstants(*pipeline_layout, push_stages, RENDERAREA_LAYOUT_OFFSET,
++                                 sizeof(render_area_data), &render_area_data);
+         }
+         if (!descriptor_set_layout) {
+             return;
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+index f23e07ec30..1218f882c8 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
++++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+@@ -323,12 +323,14 @@ bool Scheduler::UpdateGraphicsPipeline(GraphicsPipeline* pipeline) {
+     return true;
+ }
+ 
+-bool Scheduler::UpdateRescaling(bool is_rescaling) {
+-    if (state.rescaling_defined && is_rescaling == state.is_rescaling) {
++bool Scheduler::UpdateRescaling(bool is_rescaling, bool mesh_layout) {
++    if (state.rescaling_defined && is_rescaling == state.is_rescaling &&
++        mesh_layout == state.mesh_layout) {
+         return false;
+     }
+     state.rescaling_defined = true;
+     state.is_rescaling = is_rescaling;
++    state.mesh_layout = mesh_layout;
+     return true;
+ }
+ 
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.h b/src/video_core/renderer_vulkan/vk_scheduler.h
+index ca0ef54a28..54a31d952c 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.h
++++ b/src/video_core/renderer_vulkan/vk_scheduler.h
+@@ -99,7 +99,7 @@ public:
+     bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
+ 
+     /// Update the rescaling state. Returns true if the state has to be updated.
+-    bool UpdateRescaling(bool is_rescaling);
++    bool UpdateRescaling(bool is_rescaling, bool mesh_layout);
+ 
+     /// Returns true when the descriptor buffer chunk has to be bound into the command buffer.
+     bool UpdateDescriptorBufferChunk(u32 descriptor_chunk);
+@@ -301,6 +301,7 @@ private:
+         GraphicsPipeline* graphics_pipeline = nullptr;
+         bool is_rescaling = false;
+         bool rescaling_defined = false;
++        bool mesh_layout = false;
+         bool needs_state_enable_refresh = false;
+         u32 descriptor_buffer_chunk = 0;
+         bool descriptor_buffer_bound = false;

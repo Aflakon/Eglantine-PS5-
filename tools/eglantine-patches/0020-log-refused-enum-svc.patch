@@ -1,0 +1,19 @@
+diff --git a/src/core/hle/kernel/svc.cpp b/src/core/hle/kernel/svc.cpp
+index db4713af67..b46d1d537d 100644
+--- a/src/core/hle/kernel/svc.cpp
++++ b/src/core/hle/kernel/svc.cpp
+@@ -2570,7 +2570,14 @@ void Call(Core::System& system, u32 imm) {
+                   address, size, mask, attr, result.raw);
+         args[0] = result.raw;
+     } else if (process.Is64Bit()) {
++        auto args_in = args;
+         Call64(system, imm, args);
++        // A call the emulator does not take: games abort on it (2001-0120) with nothing in the log.
++        if (static_cast<u32>(GetArg64(args, 0)) == 0xF001) {
++            LOG_ERROR(Kernel_SVC, "svc {:#04x} refused an enum value: [0]={:#x} [1]={:#x} [2]={:#x} [3]={:#x}",
++                      imm, GetArg64(args_in, 0), GetArg64(args_in, 1), GetArg64(args_in, 2),
++                      GetArg64(args_in, 3));
++        }
+     } else {
+         Call32(system, imm, args);
+     }

@@ -2,6 +2,16 @@
   "about": "Pinned inputs of the EglantinePS5 build. `make deps` (tools/deps.py) fetches every missing item and leaves existing checkouts and files untouched. Paths are relative to this repository; ../ means next to it, the layout the build expects.",
   "items": [
     {
+      "name": "dav1d",
+      "about": "dav1d 1.5.4 source, the AV1 decoder for Switch 2 movies (The Legend of Zelda: Ocarina of Time)",
+      "kind": "archive",
+      "url": "https://github.com/videolan/dav1d/archive/54706fc6bc0cdecab7e9593974a4039cc038fca7.tar.gz",
+      "sha512": "00f2ee7c0c2f2df1b3e38d8bec6fd661c18e4e6fadd02c02b6238f1bed7512e8507933886b502226f833dee40c71ee4bc075de8d4cfd86873bcbaf6e233a4370",
+      "extract": ".deps/dav1d-54706fc6bc",
+      "strip": 1,
+      "creates": ".deps/dav1d-54706fc6bc/meson.build"
+    },
+    {
       "name": "ffmpeg",
       "about": "FFmpeg source as pinned by Eden's cpmfile.json, built for the PS5 decoders",
       "kind": "archive",
@@ -120,7 +130,7 @@
       "about": "Mihawk's PS5 Mesa (RADV) source",
       "kind": "git",
       "url": "https://github.com/mihawk-99/PS5_Mesa.git",
-      "commit": "7b59ef27c1b09b9671bc4153c41940c3155c3af2",
+      "commit": "f5610fe27090acd2509e5ce807140676f0b04473",
       "path": "../mihawk-mesa-review"
     },
     {

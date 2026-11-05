@@ -51,7 +51,14 @@ assert 'GPU::~GPU() { impl->NotifyShutdown(); }' in gpu
 shutdown = gpu.split('    void NotifyShutdown() {', 1)[1].split('    /// Obtain', 1)[0]
 assert 'sync_cv.notify_all();\n        }\n        gpu_thread.Stop();' in shutdown
 assert shutdown.index('gpu_thread.Stop();') < shutdown.index('sync_requests.clear();') < shutdown.index('sync_requests_stopped = true;')
-assert '~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }' in gpu
+if '~Impl() = default;' in (upstream / 'video_core/gpu.cpp').read_text():
+    assert '~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }' in gpu
+else:
+    destructor = gpu.split('    ~Impl() {', 1)[1].split('\n    std::shared_ptr<Control::ChannelState> CreateChannel', 1)[0]
+    assert destructor.index('NotifyShutdown();') < destructor.index('renderer->Context().MakeCurrent();')
+    assert destructor.index('renderer->Context().MakeCurrent();') < destructor.index('glFinish();') < destructor.index('renderer.reset();')
+    assert 'renderer && Settings::IsOpenGL()' in destructor
+    assert 'renderer.reset();' in (upstream / 'video_core/gpu.cpp').read_text()
 core = (cache / 'native-local/headless/core.cpp').read_text()
 shutdown_core = core.split('    void ShutdownMainProcess() {', 1)[1].split('    bool IsShuttingDown()', 1)[0]
 assert shutdown_core.index('gpu_core->NotifyShutdown()') < shutdown_core.index('services.reset()') < shutdown_core.index('gpu_core.reset()')

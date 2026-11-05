@@ -1,0 +1,133 @@
+diff --git a/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp b/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp
+index c5b23bef3e..fd3c80dc44 100644
+--- a/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp
++++ b/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.cpp
+@@ -5,6 +5,7 @@
+ // SPDX-FileCopyrightText: 2021 Skyline Team and Contributors
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
++#include <atomic>
+ #include <cstdlib>
+ #include <cstring>
+ #include <utility>
+@@ -12,8 +13,11 @@
+ #include "common/alignment.h"
+ #include "common/assert.h"
+ #include "common/common_types.h"
++#include "common/div_ceil.h"
+ #include "common/logging.h"
+ #include "core/core.h"
++#include "core/hle/kernel/k_process.h"
++#include "core/memory.h"
+ #include "core/hle/service/nvdrv/core/container.h"
+ #include "core/hle/service/nvdrv/core/heap_mapper.h"
+ #include "core/hle/service/nvdrv/core/nvmap.h"
+@@ -132,6 +136,60 @@ void nvhost_as_gpu::OnOpen(NvCore::SessionId session_id, DeviceFD fd) {
+     nx2_session = session_id;
+ }
+ 
++// A reused SMMU range was mapped to the CPU pages behind its addresses back then. The game frees
++// GPU memory and allocates new pages at the same addresses, so the range can point at pages that
++// now hold something else, and the GPU reads those (from Purebuilt/AMDEGL f6fba4f: Mario Kart
++// World's compute channels ran ASCII text). Maps again every page whose memory changed.
++// EDEN_NX2_REFRESH_DEVICE_RANGES=0 turns this off.
++void nvhost_as_gpu::Nx2RefreshDeviceRange(DAddr device_address, u64 cpu_address, u64 size,
++                                          NvCore::Session& session) {
++    static const bool enabled = [] {
++        const char* value = std::getenv("EDEN_NX2_REFRESH_DEVICE_RANGES");
++        return value == nullptr || value[0] != '0';
++    }();
++    if (!enabled || session.process == nullptr) {
++        return;
++    }
++    auto& smmu = system.Host1x().MemoryManager();
++    auto& memory = session.process->GetMemory();
++    constexpr u64 PageSize = Core::Memory::YUZU_PAGESIZE;
++    const u64 pages = Common::DivCeil(size + (cpu_address & (PageSize - 1)), PageSize);
++    const u64 cpu_base = Common::AlignDown(cpu_address, PageSize);
++    const DAddr device_base = Common::AlignDown(device_address, PageSize);
++    const auto refresh = [&](u64 first, u64 count) {
++        static std::atomic<u32> reported{};
++        if (reported.fetch_add(1) < 32) {
++            LOG_WARNING(Service_NVDRV,
++                        "Switch 2 GPU mapping of CPU {:#x}+{:#x} reused device {:#x} whose pages "
++                        "changed: mapped again",
++                        cpu_base + first * PageSize, count * PageSize,
++                        device_base + first * PageSize);
++        }
++        smmu.Unmap(device_base + first * PageSize, count * PageSize);
++        smmu.Map(device_base + first * PageSize, cpu_base + first * PageSize, count * PageSize,
++                 session.asid, true);
++    };
++    u64 run_start = 0;
++    u64 run_length = 0;
++    for (u64 page = 0; page < pages; ++page) {
++        const u8* const cpu_pointer =
++            memory.GetPointerSilent(Common::ProcessAddress{cpu_base + page * PageSize});
++        const u8* const device_pointer = smmu.GetPointer<u8>(device_base + page * PageSize);
++        if (cpu_pointer != device_pointer) {
++            if (run_length == 0) {
++                run_start = page;
++            }
++            ++run_length;
++        } else if (run_length != 0) {
++            refresh(run_start, run_length);
++            run_length = 0;
++        }
++    }
++    if (run_length != 0) {
++        refresh(run_start, run_length);
++    }
++}
++
+ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
+     std::scoped_lock lock(mutex);
+     auto* session = container.GetSession(nx2_session);
+@@ -143,12 +201,16 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
+     // The same CPU range is often mapped twice (at its own address and in a sparse region), so
+     // reuse its SMMU mapping.
+     Nx2DeviceRange range{};
++    bool reused = false;
+     if (const auto it = nx2_device_ranges.find({cpu_address, size}); it != nx2_device_ranges.end()) {
+         range = it->second;
++        reused = true;
+     } else if (session->has_preallocated_area && session->mapper->IsInBounds(cpu_address, size)) {
+         range = {session->mapper->Map(cpu_address, size), true};
+     } else {
++        bool allocated = false;
+         const auto allocate = [&]() -> u64 {
++            allocated = true;
+             auto& smmu = system.Host1x().MemoryManager();
+             const DAddr address = smmu.Allocate(Common::AlignUp(size, 0x20000));
+             if (address != 0) {
+@@ -164,6 +226,7 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
+             range = {Nx2GpuMemoryRegistry::Get().AcquireDeviceRange(session->asid.id, cpu_address,
+                                                                     size, allocate),
+                      false, true, session->asid.id};
++            reused = !allocated;
+         }
+         if (range.address == 0) {
+             LOG_CRITICAL(Service_NVDRV, "Switch 2 GPU memory {:#x}+{:#x}: out of SMMU space",
+@@ -172,6 +235,9 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
+         }
+     }
+     const DAddr device_address = range.address;
++    if (reused && !range.heap) {
++        Nx2RefreshDeviceRange(device_address, cpu_address, size, *session);
++    }
+     nx2_device_ranges[{cpu_address, size}] = range;
+     Nx2GpuMemoryRegistry::Get().RecordDeviceRange(cpu_address, size, device_address);
+     // On the GPU thread, like unmaps: a GMMU map takes the texture cache lock, and the callers hold
+diff --git a/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.h b/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.h
+index 37b6d0d4c4..1924b2da65 100644
+--- a/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.h
++++ b/src/core/hle/service/nvdrv/devices/nvhost_as_gpu.h
+@@ -233,6 +233,8 @@ private:
+ 
+     // Switch 2: maps GPU-accessible process memory (CPU range) at a GPU address.
+     void Nx2Map(u64 gpu_address, u64 cpu_address, u64 size);
++    void Nx2RefreshDeviceRange(DAddr device_address, u64 cpu_address, u64 size,
++                               NvCore::Session& session);
+     void Nx2Unmap(u64 gpu_address, u64 size);
+     NvCore::SessionId nx2_session{};
+     struct Nx2DeviceRange {

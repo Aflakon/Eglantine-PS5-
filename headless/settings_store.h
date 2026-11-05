@@ -630,9 +630,15 @@ inline PerformanceSettings LoadPerformance(uint64_t title_id, const std::string&
         value("skip_invalidation", result.skip_invalidation);
     };
     read("");
-    // Donkey Kong Bananza starts without reactive flushing until its own settings say otherwise, as
-    // in Orchid. Not with fast_gpu as well: that level split the GPU thread and it hung at 95%.
-    if (title_id == 0x040074A01BF12000ULL) result.reactive_flushing = false;
+    // A Switch 2 title (program ids 0400...) starts from the core's own defaults for its games:
+    // the fast GPU fences (gpu_accuracy Low) and no reactive flushing, without which the core's
+    // split GPU thread stays off and every fence waits for the host GPU. The game's own values
+    // (Triangle in the Library) still win below.
+    if ((title_id >> 56) == 0x04) {
+        // Mario Kart World has not got past loading with the fast fences; without them it has.
+        result.fast_gpu = title_id != 0x0400C3F00006E000ULL;
+        result.reactive_flushing = false;
+    }
     if (title_id) read("/games/" + Settings::TitleKey(title_id));
     return result;
 }
