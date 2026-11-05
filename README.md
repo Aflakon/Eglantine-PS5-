@@ -31,17 +31,20 @@ A PS5 homebrew build that stacks three layers, always updated in this order:
 | 2 | **PS5 frontend** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (launcher, Vulkan/RADV port, packaging), built on BlackBearReloaded's ProsperoEden | This repository's full history is that project's; we rebase on its `main` and keep our changes on top. |
 | 3 | **NUP support** | `.nup` is Eglantine's single-file package (base game + update + DLC) | The library lists `.nup` files, runs them, and can **pack a game folder into a NUP** on the console. |
 
-Current core pin: **Eglantine `e736dfd`** (`nx2`, `build-219` + 16 commits, 2026-11-04).
+Current core pin: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 2026-11-05).
 
 ## Status (honest version)
 
 | Item | State |
 |---|---|
-| Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus. |
+| Console tested | PS5 firmware **13.60**, jailbroken, launched with ShadowMountPlus; other users run it on **11.40** and **11.60**. |
 | Donkey Kong Bananza (Switch 2, `.nup` with update 3.2.0 + DLC) | Runs on the current build (core `3081c8e`) with its update and DLC: **Docked, 1x resolution, 10-25 fps depending on the zone, about 15 in large open areas, 30 fps in cutscenes**. A new zone can show purple the first time it is entered; in one test the game's own "reset terrain" option cleared it. |
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
 | Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
 | Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
+| Mario Kart World (Switch 2) | Reaches its menu at about 20-25 fps (v1.219.014; task and mesh draws are off because they hang the PS5's GPU). It runs out of graphics memory after one or two minutes, and sometimes stops at 98% while loading: close the app and try again. |
+| The Legend of Zelda: Ocarina of Time (Switch 2) | Title screen and sound work. On v1.219.014 the picture stayed black during its movies and the game stopped after the intro; v1.219.015 carries fixes for both that have not been tried on a console yet. |
+| Donkey Kong Bananza on v1.219.014 | Crashed when many objects broke at once; v1.219.015 has the fix, not yet tried on a console. |
 | Other Switch 2 titles | Some fail early. Nothing is promised beyond what is listed here. |
 | Frame generation (Lossless Scaling) | Compiled in, but pointless at a 20 fps base. |
 
@@ -153,7 +156,7 @@ Una build homebrew para PS5 que apila tres capas, siempre actualizadas en este o
 | 2 | **Frontend de PS5** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (lanzador, port de Vulkan/RADV, empaquetado), basado en ProsperoEden de BlackBearReloaded | El historial de este repo es el de ese proyecto; rebaseamos sobre su `main` y mantenemos nuestros cambios encima. |
 | 3 | **Soporte NUP** | `.nup` es el paquete de un solo fichero de Eglantine (juego base + update + DLC) | La biblioteca lista y ejecuta `.nup` y puede **empaquetar una carpeta de juego en un NUP** en la propia consola. |
 
-Core actual: **Eglantine `e736dfd`** (`nx2`, `build-219` + 16 commits, 4-nov-2026).
+Core actual: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 5-nov-2026).
 
 A Switch 2 game (title IDs that start with `0400`) starts from the emulator core's own defaults for its games instead of the general values: **Faster GPU emulation** on and **Reactive flushing** off. Without them the core's second GPU thread stays off and every GPU fence waits for the console's GPU; Mario Kart World's title screen ran at about 11 FPS with the general defaults and about 24 FPS with these (see [docs/MKW-TITLE-FPS.md](docs/MKW-TITLE-FPS.md)). The game's own values, set in the Library, still win.
 
@@ -163,11 +166,14 @@ A game can have its own values: in its settings, **Performance** (see [Settings 
 
 | Punto | Estado |
 |---|---|
-| Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus. |
+| Probado en consola | PS5 con firmware **13.60**, con jailbreak y ShadowMountPlus; otros usuarios la usan en **11.40** y **11.60**. |
 | Donkey Kong Bananza (Switch 2, `.nup` con update 3.2.0 + DLC) | Funciona con la build actual (core `3081c8e`) con su update y su DLC: **modo TV, resolución 1x, 10-25 fps según la zona, unos 15 en zonas abiertas grandes, 30 fps en cinemáticas**. Una zona nueva puede verse morada la primera vez que se entra; en una prueba, la opción del juego «resetear terreno» lo arregló. |
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
 | Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
 | NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
+| Mario Kart World (Switch 2) | Llega a su menú a unos 20-25 fps (v1.219.014; los dibujos task y mesh están desactivados porque cuelgan la GPU de la PS5). Se queda sin memoria gráfica al cabo de uno o dos minutos, y a veces se para al 98 % de la carga: cierra la app y vuelve a intentarlo. |
+| The Legend of Zelda: Ocarina of Time (Switch 2) | La pantalla de título y el sonido funcionan. En la v1.219.014 la imagen se quedaba en negro durante sus vídeos y el juego se paraba tras la intro; la v1.219.015 lleva arreglos para ambas cosas que aún no se han probado en una consola. |
+| Donkey Kong Bananza en la v1.219.014 | Se cerraba al romperse muchos objetos a la vez; la v1.219.015 lleva el arreglo, aún sin probar en una consola. |
 | Otros juegos de Switch 2 | Algunos fallan pronto. No prometemos nada más allá de lo que aparece aquí. |
 | Generación de fotogramas (Lossless Scaling) | Incluida, pero sin sentido con una base de 20 fps. |
 
