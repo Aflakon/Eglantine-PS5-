@@ -116,6 +116,8 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0044 | The Legend of Zelda: Ocarina of Time's native programs and upscale stand-in (Eglantine PR 614, from A-Man-With-A-Plan-dev) |
 | 0045 | Ocarina of Time's GPU-only regions are backed whole (Aubépine `24b7b61718`, adapted) |
 | 0046 | Mario Kart World runs without task and mesh draws, which hang the PS5's GPU |
+| 0047 | Native compute storage buffers sized from their descriptors outside DLSS passes, far fewer readbacks; Mario Kart World's present pacing (Eglantine PR 609) |
+| 0048 | Command lists submitted behind a queued GPU map are copied after the map, not as zeros (Eglantine PR 543, merged with this core's empty-list handling) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
