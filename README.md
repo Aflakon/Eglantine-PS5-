@@ -105,6 +105,7 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0033 | Texture cache counts what host images really take (Orchid `86587ae279`, godpow) |
 | 0034 | Sparse images are backed whole when their tiles or layers cannot be set up (Orchid `64a5e4df86`) |
 | 0035 | Released video images return as end-of-stream frames after a movie ends (Orchid `73cbde2a3a`) |
+| 0036 | Native lowering of the HMMA matrix instruction, far less shader code (heydemoura/EglantinePS5 patch `0013`, adapted to this core) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
