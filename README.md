@@ -31,7 +31,7 @@ A PS5 homebrew build that stacks three layers, always updated in this order:
 | 2 | **PS5 frontend** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (launcher, Vulkan/RADV port, packaging), built on BlackBearReloaded's ProsperoEden | This repository's full history is that project's; we rebase on its `main` and keep our changes on top. |
 | 3 | **NUP support** | `.nup` is Eglantine's single-file package (base game + update + DLC) | The library lists `.nup` files, runs them, and can **pack a game folder into a NUP** on the console. |
 
-Current core pin: **Eglantine `3081c8e`** (`nx2`, `build-219`, 2026-11-04).
+Current core pin: **Eglantine `e736dfd`** (`nx2`, `build-219` + 16 commits, 2026-11-04).
 
 ## Status (honest version)
 
@@ -89,6 +89,11 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0016 | Draws that sample their own colour target read a copy (Orchid `a49c81063`, MythosOfs) |
 | 0017 | Page checks skipped for buffer ranges with no new CPU writes (Orchid `a3be6e11b`, `5ffe9eb53`, `4476c8671`, `2e0b577bb`; from monteger8/Eglantine-DKB, Claude for adamd) |
 | 0018 | GPU split: wakes a back thread that stayed parked (Orchid `1e4e0e82b`, from godpow/Eglantine, godpow) |
+| 0019 | Log a guest thread that waits over 5 s for the GPU thread |
+| 0020 | Log a kernel call that refuses an enum value (games abort on it with 2001-0120) |
+| 0021 | Donkey Kong Bananza's terrain counters (heydemoura/EglantinePS5 patch `0008`) |
+| 0022 | Direct guest reads of pages the GPU never wrote (from heydemoura/EglantinePS5 patch `0006`) |
+| 0023 | Diagnostic headers the frontend's reports use (heydemoura/EglantinePS5 patch `0004`) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
@@ -120,7 +125,7 @@ Una build homebrew para PS5 que apila tres capas, siempre actualizadas en este o
 | 2 | **Frontend de PS5** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (lanzador, port de Vulkan/RADV, empaquetado), basado en ProsperoEden de BlackBearReloaded | El historial de este repo es el de ese proyecto; rebaseamos sobre su `main` y mantenemos nuestros cambios encima. |
 | 3 | **Soporte NUP** | `.nup` es el paquete de un solo fichero de Eglantine (juego base + update + DLC) | La biblioteca lista y ejecuta `.nup` y puede **empaquetar una carpeta de juego en un NUP** en la propia consola. |
 
-Core actual: **Eglantine `3081c8e`** (`nx2`, `build-219`, 4-nov-2026).
+Core actual: **Eglantine `e736dfd`** (`nx2`, `build-219` + 16 commits, 4-nov-2026).
 
 A Switch 2 game (title IDs that start with `0400`) starts from the emulator core's own defaults for its games instead of the general values: **Faster GPU emulation** on and **Reactive flushing** off. Without them the core's second GPU thread stays off and every GPU fence waits for the console's GPU; Mario Kart World's title screen ran at about 11 FPS with the general defaults and about 24 FPS with these (see [docs/MKW-TITLE-FPS.md](docs/MKW-TITLE-FPS.md)). The game's own values, set in the Library, still win.
 
