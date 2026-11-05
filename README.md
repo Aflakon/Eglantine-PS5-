@@ -130,6 +130,8 @@ Number 0006 is intentionally missing: 32 storage buffers per stage is now in the
 
 Logs on the console: `/data/eglantineps5/user/log/eden_log.txt` (and `.old.txt`), `/data/eglantineps5/logs/`. Settings: `/data/eglantineps5/config/eglantineps5.json`.
 
+**Testing switches:** Settings > Diagnostics > Testing switches changes the emulator's switches (`EDEN_NX2_...`) from the menu: upscaling networks, task and mesh draws, the split GPU thread, the texture memory limit, the GPU thread profile and others. They are saved to `/data/eglantineps5/config/env.txt` (one `NAME=VALUE` per line, which can also be edited by hand) and apply from the next start, so the app asks to confirm and closes.
+
 ## Updating and building
 
 Update order, every time: **(1)** move the `Eglantine/` submodule to the newest Djihads80 `nx2` commit and re-apply the patches (`tools/update-eglantine.sh`; needs bash ≥ 4 because `apply-eglantine-patches.sh` uses `mapfile`, so on macOS use Homebrew bash or a Linux container); **(2)** merge the newest heydemoura/EglantinePS5 `main`; **(3)** check NUP loading and packing; **(4)** build, test on the console, publish.
@@ -206,6 +208,8 @@ En la consola, el driver de Vulkan colgaba un juego de Switch 2 cuando arrancaba
 Todos los cambios al core del emulador son parches simples en [`tools/eglantine-patches/`](tools/eglantine-patches), que se aplican solos al compilar; si uno deja de aplicar, la build lo dice. La tabla de parches está en la sección en inglés. Falta el 0006 a propósito: las 32 storage buffers por etapa ya vienen en el core. Los cambios del frontend (NUP en la biblioteca, «empaquetar a NUP», `.gitmodules` apuntando al core de Djihads80, anclajes del port de Vulkan para el core más nuevo, volcado del log línea a línea) son commits normales encima del frontend original.
 
 Logs en la consola: `/data/eglantineps5/user/log/eden_log.txt` (y `.old.txt`), `/data/eglantineps5/logs/`. Ajustes: `/data/eglantineps5/config/eglantineps5.json`.
+
+**Interruptores de prueba:** Ajustes > Diagnóstico > Interruptores de prueba cambia desde el menú los interruptores del emulador (`EDEN_NX2_...`): redes de escalado, dibujos task y mesh, el hilo de GPU dividido, el límite de memoria de texturas, el perfil del hilo de GPU y otros. Se guardan en `/data/eglantineps5/config/env.txt` (un `NOMBRE=VALOR` por línea, que también se puede editar a mano) y se aplican desde el siguiente arranque, así que la app pide confirmación y se cierra.
 
 ## Actualizar y compilar
 

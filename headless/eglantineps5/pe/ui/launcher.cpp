@@ -38,6 +38,7 @@ Launcher::Launcher(Services &services, Textures &textures, const Fonts &fonts, b
     downloads_ = services_.downloads();
     apply_look();
     read_profiles();
+    read_testing();
     read_home();
     const bool continue_ready = home_.setup_ready && home_.last_exists;
     home_focus_ = continue_ready ? 0 : home_.setup_ready ? 1 : 2;
@@ -245,6 +246,8 @@ void Launcher::press(Key key)
         return press_sync_setup(key);
     if (modal_ == Modal::pairing)
         return press_pairing(key);
+    if (modal_ == Modal::testing)
+        return press_testing(key);
     if (modal_ != Modal::none)
         return press_dialog(key);
     switch (screen_)
@@ -282,6 +285,7 @@ void Launcher::update(float dt)
     update_multiplayer();
     update_game_options();
     update_nfs();
+    update_testing(dt);
     update_prepare(dt);
     update_controllers(dt);
     transition_.update(dt);
@@ -308,6 +312,7 @@ void Launcher::update(float dt)
     game_rows_.update(dt);
     mod_rows_.update(dt);
     option_rows_.update(dt);
+    testing_rows_.update(dt);
     mapping_rows_.update(dt);
     profile_rows_.update(dt);
     source_rows_.update(dt);
@@ -556,6 +561,8 @@ void Launcher::draw(gfx::DrawList &list)
             draw_pairing(c, opened);
         else if (modal_shown_ == Modal::sources)
             draw_sources(c, opened);
+        else if (modal_shown_ == Modal::testing)
+            draw_testing(c, opened);
         else
             draw_dialog(c, modal_shown_, opened);
     }

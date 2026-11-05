@@ -50,6 +50,9 @@ public:
     const std::vector<std::string>& language_labels() override;
     std::string language_region(int language) override;
     std::string setup_details() override;
+    std::vector<std::pair<std::string, std::string>> test_switches() override;
+    bool set_test_switches(const std::vector<std::string>& names,
+                           const std::vector<std::pair<std::string, std::string>>& values) override;
 
     bool folders(const std::string& directory, std::vector<std::string>* names) override;
     pe::ui::FolderInfo folder_info(const std::string& directory) override;

@@ -113,8 +113,20 @@ msgstr ""
 msgid "AMD FSR 3"
 msgstr ""
 
+#: eden_services.cpp, pe/ui/library.cpp
+msgid "Another game is being packed."
+msgstr ""
+
 #: eden_services.cpp
 msgid "Another language"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Apply"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Apply the changes? EglantinePS5 closes, and they take effect when you open it again. Press again to confirm."
 msgstr ""
 
 #. The button mapping has not been changed.
@@ -156,7 +168,7 @@ msgid "Automatic"
 msgstr ""
 
 #. Button hint: go back one screen.
-#: pe/ui/browse.cpp, pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/multiplayer.cpp, pe/ui/pairing.cpp, pe/ui/profiles.cpp, pe/ui/remote.cpp, pe/ui/save_sync.cpp, pe/ui/settings.cpp, pe/ui/update.cpp
+#: pe/ui/browse.cpp, pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/multiplayer.cpp, pe/ui/pairing.cpp, pe/ui/profiles.cpp, pe/ui/remote.cpp, pe/ui/save_sync.cpp, pe/ui/settings.cpp, pe/ui/testing.cpp, pe/ui/update.cpp
 msgid "Back"
 msgstr ""
 
@@ -204,6 +216,10 @@ msgstr ""
 msgid "BUTTON MAPPING"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "By default it gets pages as they are written. Whole backs it all at once: more memory, and a test for wrong colours."
+msgstr ""
+
 #: pe/ui/pairing.cpp, pe/ui/remote.cpp, pe/ui/update.cpp
 msgid "Cancel"
 msgstr ""
@@ -221,7 +237,7 @@ msgid "Cannot read firmware/ in {0}. Install extracted firmware NCAs."
 msgstr ""
 
 #. Button hint: change the highlighted setting.
-#: pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/settings.cpp
+#: pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/settings.cpp, pe/ui/testing.cpp
 msgid "Change"
 msgstr ""
 
@@ -354,6 +370,10 @@ msgstr ""
 msgid "CONTROLS"
 msgstr ""
 
+#: pe/ui/library.cpp
+msgid "Convert to NUP"
+msgstr ""
+
 #: pe/ui/remote.cpp
 msgid "Could not cancel the download."
 msgstr ""
@@ -386,8 +406,12 @@ msgstr ""
 msgid "Could not save the folder. Please try again."
 msgstr ""
 
-#: eden_services.cpp, pe/ui/browse.cpp, pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/profiles.cpp
+#: eden_services.cpp, pe/ui/browse.cpp, pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/profiles.cpp, pe/ui/testing.cpp
 msgid "Could not save. Please try again."
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Could not start packing."
 msgstr ""
 
 #: pe/ui/multiplayer.cpp
@@ -416,6 +440,14 @@ msgstr ""
 #. A DualSense button (the X-shaped one). Name the shape, not the letter.
 #: pe/ui/game_options.cpp
 msgid "Cross"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Custom ({0})"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Default"
 msgstr ""
 
 #. A per-game setting that follows the general setting; {0} is its value.
@@ -638,6 +670,10 @@ msgstr ""
 msgid "Europe"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Every game"
+msgstr ""
+
 #. Button hint: copy the game's save out to a folder.
 #: pe/ui/library.cpp
 msgid "Export a copy"
@@ -650,6 +686,10 @@ msgstr ""
 #. {0} is a folder.
 #: eden_services.cpp, host/fake_services.hpp
 msgid "Exported to {0}."
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Failed"
 msgstr ""
 
 #. A switch: the emulated processor's floating-point math is less exact and faster. CPU stays.
@@ -681,6 +721,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "FASTER GPU EMULATION"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Fence batching"
 msgstr ""
 
 #: pe/ui/library.cpp
@@ -723,6 +767,10 @@ msgstr ""
 
 #: pe/ui/game_options.cpp
 msgid "For every controller. A game can have its own."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "For tests: they change how the emulator works in every game."
 msgstr ""
 
 #: pe/ui/library.cpp
@@ -852,12 +900,24 @@ msgstr ""
 msgid "Go offline"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "GPU thread profile"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "GPU-only memory"
+msgstr ""
+
 #: pe/ui/settings.cpp
 msgid "Graphics backend and how games are scaled to your TV."
 msgstr ""
 
 #: eden_services.cpp
 msgid "Graphics backend initialization failed. Try another backend in Settings; see stderr.log and eden_log.txt for driver details."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Groups the GPU's fences. Off makes them one at a time: slower, for comparisons."
 msgstr ""
 
 #. Console mode: the console as if held in the hands. Keep it short (about 9 letters).
@@ -876,6 +936,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "How games are drawn and scaled to your TV."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "How neural networks are translated for the PS5's GPU. Off uses the older, larger code."
 msgstr ""
 
 #. Button hint: copy a save in.
@@ -1069,6 +1133,10 @@ msgstr ""
 msgid "Lowest GPU accuracy: faster in demanding games, and graphics can be wrong."
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Macros on the second thread"
+msgstr ""
+
 #. Headline of the Settings screen.
 #: pe/ui/settings.cpp
 msgid "Make it yours."
@@ -1122,6 +1190,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "Muted"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Native matrix lowering"
 msgstr ""
 
 #. Button hint: move the highlight.
@@ -1299,6 +1371,10 @@ msgstr ""
 msgid "Not on the console yet. Download it to play and to change its settings."
 msgstr ""
 
+#: pe/ui/library.cpp
+msgid "Not packed"
+msgstr ""
+
 #: pe/ui/pairing.cpp
 msgid "Not paired"
 msgstr ""
@@ -1315,14 +1391,22 @@ msgstr ""
 msgid "Not set up"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Nothing to apply: change a switch with Left and Right first."
+msgstr ""
+
 #. Short status at the right of the Save data row.
 #: pe/ui/library.cpp
 msgid "Nothing to import"
 msgstr ""
 
 #. A setting that is switched off.
-#: pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/settings.cpp
+#: pe/ui/game_options.cpp, pe/ui/library.cpp, pe/ui/settings.cpp, pe/ui/testing.cpp
 msgid "Off"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Off by default in Mario Kart World, where they hang the GPU. Off skips them in every game; On draws them in Mario Kart World too."
 msgstr ""
 
 #: pe/ui/multiplayer.cpp, pe/ui/settings.cpp
@@ -1330,7 +1414,7 @@ msgid "Offline"
 msgstr ""
 
 #. A setting that is switched on.
-#: pe/ui/game_options.cpp, pe/ui/settings.cpp
+#: pe/ui/game_options.cpp, pe/ui/settings.cpp, pe/ui/testing.cpp
 msgid "On"
 msgstr ""
 
@@ -1373,6 +1457,34 @@ msgstr ""
 #. Setting: the size of the picture sent to the TV (1080p, 1440p or 2160p). Not the same as 'Resolution', which scales the game's own picture (1x, 2x...).
 #: pe/ui/settings.cpp
 msgid "Output resolution"
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Pack"
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Packed"
+msgstr ""
+
+#: eden_services.cpp
+msgid "Packing failed."
+msgstr ""
+
+#: eden_services.cpp
+msgid "Packing failed: "
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Packing started. It goes on in the background, and the NUP file shows in the Library when it is ready. Starting a game stops it."
+msgstr ""
+
+#: eden_services.cpp
+msgid "Packing stopped."
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Packing {0}%"
 msgstr ""
 
 #. Button hint: jump a page of the list (L1 / R1).
@@ -1489,6 +1601,10 @@ msgstr ""
 
 #: pe/ui/library.cpp
 msgid "Press again to delete the game and its updates and DLC from the console. Save data and settings are kept."
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Press again to pack this game, with its updates and DLC, into one NUP file next to its folder. It needs free space like the game's size."
 msgstr ""
 
 #. Asked before a save is imported over the one in use.
@@ -1683,6 +1799,10 @@ msgstr ""
 msgid "Room {0} of {1}"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Runs the GPU's commands on two threads. Off uses one: slower, and a test when a game freezes or crashes in the GPU."
+msgstr ""
+
 #: settings_store.h
 msgid "Russian"
 msgstr ""
@@ -1772,6 +1892,10 @@ msgstr ""
 msgid "Saved. Applies when a game starts."
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Saved. EglantinePS5 closes now: open it again to use the switches."
+msgstr ""
+
 #: pe/ui/browse.cpp
 msgid "Saved. Reopen EglantinePS5 to use this folder."
 msgstr ""
@@ -1786,7 +1910,7 @@ msgid "Scroll"
 msgstr ""
 
 #. Button hint: choose the highlighted item (not the Select button).
-#: pe/ui/game_options.cpp, pe/ui/home.cpp, pe/ui/library.cpp, pe/ui/multiplayer.cpp, pe/ui/pairing.cpp, pe/ui/remote.cpp, pe/ui/save_sync.cpp, pe/ui/settings.cpp, pe/ui/update.cpp
+#: pe/ui/game_options.cpp, pe/ui/home.cpp, pe/ui/library.cpp, pe/ui/multiplayer.cpp, pe/ui/pairing.cpp, pe/ui/remote.cpp, pe/ui/save_sync.cpp, pe/ui/settings.cpp, pe/ui/testing.cpp, pe/ui/update.cpp
 msgid "Select"
 msgstr ""
 
@@ -1911,6 +2035,10 @@ msgstr ""
 msgid "Spanish (Latin America)"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Split GPU thread"
+msgstr ""
+
 #. A DualSense button.
 #: pe/ui/game_options.cpp
 msgid "Square"
@@ -1938,12 +2066,28 @@ msgstr ""
 msgid "STATE"
 msgstr ""
 
+#: pe/ui/library.cpp
+msgid "Stop"
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Stopped"
+msgstr ""
+
+#: pe/ui/library.cpp
+msgid "Stopping the packing."
+msgstr ""
+
 #: pe/ui/settings.cpp
 msgid "Stops the background drifting and the screens sliding, here and on the loading screen."
 msgstr ""
 
 #: pe/ui/browse.cpp
 msgid "Supply your own files"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Switches that change how the emulator works in every game, for tests."
 msgstr ""
 
 #: pe/ui/settings.cpp
@@ -1973,6 +2117,26 @@ msgstr ""
 
 #: pe/ui/profiles.cpp
 msgid "Taken off the list. Its save data stays on the console."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Task and mesh draws"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "TESTING SWITCHES"
+msgstr ""
+
+#: pe/ui/settings.cpp, pe/ui/testing.cpp
+msgid "Testing switches"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Testing switches on"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Texture memory limit"
 msgstr ""
 
 #: settings_store.h
@@ -2031,6 +2195,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "The language games use when they offer it."
+msgstr ""
+
+#: eden_services.cpp
+msgid "The NUP file is ready, next to the game's folder."
 msgstr ""
 
 #: pe/ui/pairing.cpp
@@ -2093,6 +2261,14 @@ msgstr ""
 #. The game has a button mapping of its own.
 #: pe/ui/game_options.cpp
 msgid "This game"
+msgstr ""
+
+#: eden_services.cpp
+msgid "This game cannot be packed (it is not a folder, or its NUP file exists)."
+msgstr ""
+
+#: eden_services.cpp
+msgid "This game cannot be packed."
 msgstr ""
 
 #: eden_services.cpp
@@ -2196,6 +2372,14 @@ msgstr ""
 msgid "UPSCALING FILTER"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Upscaling networks"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Upscaling with a neural network, by default where it is known to work (Ocarina of Time, Donkey Kong Bananza). Off: a plain upscale, much faster and softer."
+msgstr ""
+
 #: eden_services.cpp
 msgid "USA"
 msgstr ""
@@ -2282,8 +2466,16 @@ msgstr ""
 msgid "What's new in version {0}"
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Where the texture cache starts freeing memory. A lower limit helps a game that runs out of memory, and it can stutter more."
+msgstr ""
+
 #: pe/ui/settings.cpp
 msgid "Who is playing. Each profile keeps its own save data and settings."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Whole"
 msgstr ""
 
 #: pe/ui/save_sync.cpp
@@ -2300,6 +2492,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "Write logs at once"
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "Writes to the log, every 10 seconds, where the GPU thread spends its time. A little slower."
 msgstr ""
 
 #: pe/ui/save_sync.cpp
@@ -2413,6 +2609,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "{0} of {1} profiles"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "{0} on"
 msgstr ""
 
 #: pe/ui/save_sync.cpp

@@ -21,6 +21,7 @@
 #include "remote/remote.h"
 #include "remote/save_sync.h"
 #include "save_sync_config.h"
+#include "test_switches.h"
 #include "version.h"
 #include "../system_keyboard.h"
 #include "common/string_util.h"
@@ -1448,6 +1449,17 @@ std::string EdenServices::default_files_folder() { return Eden::kDefaultAssetsDi
 bool EdenServices::set_files_folder(const std::string& directory) {
     const bool saved = Eden::SaveAssetsDir(directory);
     if (!saved) Eden::Report("settings", "Could not write the game files folder");
+    return saved;
+}
+
+std::vector<std::pair<std::string, std::string>> EdenServices::test_switches() {
+    return Eden::TestSwitches::Read();
+}
+
+bool EdenServices::set_test_switches(const std::vector<std::string>& names,
+                                     const std::vector<std::pair<std::string, std::string>>& values) {
+    const bool saved = Eden::TestSwitches::Write(names, values);
+    if (!saved) Eden::Report("settings", "Could not write the testing switches");
     return saved;
 }
 

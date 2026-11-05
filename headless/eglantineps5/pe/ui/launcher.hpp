@@ -92,6 +92,7 @@ class Launcher
         pairing,      // a profile paired with a server by a QR code (pairing.cpp)
         multiplayer,
         preparing,    // a game on a network share, read before it starts (remote.cpp)
+        testing,      // Settings > Diagnostics > Testing switches (testing.cpp)
     };
     // The update dialog's steps: the offer, installing, stopping it, closing for the helper to
     // finish, and a failure.
@@ -210,6 +211,17 @@ class Launcher
     int dialog_rows(Modal modal) const;
     bool frame_gen_locked() const;
     float dialog_row_top(Modal modal, int row) const;
+
+    // ---- Settings > Diagnostics > Testing switches (testing.cpp) ----
+    // Reads the switches the app started with; the dialog opens on them.
+    void read_testing();
+    void open_testing();
+    void press_testing(Key key);
+    // Closes the app once "closes now" has been read: the switches apply from the next start.
+    void update_testing(float dt);
+    void draw_testing(Canvas &c, float open);
+    // How many switches the file sets (shown in Settings > Diagnostics).
+    int testing_active() const;
 
     // ---- a newer release of the app (update.cpp) ----
     // Takes the update check's answer when it comes, and opens the dialog once the menu is free.
@@ -446,6 +458,14 @@ class Launcher
     std::string playing_;           // the one games start as
     ListView profile_rows_;
     int profile_remove_ = -1;       // the row Square was pressed on once (asked twice)
+    // Testing switches: what the file sets, each switch's choice as saved (-1: a value the menu
+    // does not offer) and as chosen, and the confirmation before the app closes to apply them.
+    std::vector<std::pair<std::string, std::string>> testing_file_;
+    std::vector<int> testing_saved_;
+    std::vector<int> testing_chosen_;
+    ListView testing_rows_;
+    bool testing_armed_ = false;     // Cross was pressed once: the next one saves and closes
+    float testing_closing_ = -1.0f;  // seconds since "closes now"; negative while not closing
 
     // game files
     std::string browse_dir_;
