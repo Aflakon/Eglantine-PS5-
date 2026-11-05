@@ -1135,9 +1135,11 @@ int main(int argc, char** argv) {
             // every session at their exact values (above), so one that is not chosen is off.
             const auto speed = Eden::LoadPerformance(eden_game_title_id(guest));
 #ifdef PS5_NATIVE
-            // Donkey Kong Bananza runs short of memory: written slots with many pages of zeroes keep
-            // only the others (576 MiB of its 4.3 GiB were such pages), and a write makes one whole.
-            ::Common::SetGuestMemoryFine(eden_game_title_id(guest) == 0x040074A01BF12000ULL);
+            // Donkey Kong Bananza and Mario Kart World run short of memory: written slots with many
+            // pages of zeroes keep only the others (576 MiB of Bananza's 4.3 GiB were such pages), and
+            // a write makes one whole.
+            ::Common::SetGuestMemoryFine(eden_game_title_id(guest) == 0x040074A01BF12000ULL ||
+                                         eden_game_title_id(guest) == 0x0400C3F00006E000ULL);
 #endif
             Settings::values.use_asynchronous_shaders = speed.async_shaders;
             if (speed.fast_gpu) {

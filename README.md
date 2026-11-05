@@ -106,6 +106,13 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0034 | Sparse images are backed whole when their tiles or layers cannot be set up (Orchid `64a5e4df86`) |
 | 0035 | Released video images return as end-of-stream frames after a movie ends (Orchid `73cbde2a3a`) |
 | 0036 | Native lowering of the HMMA matrix instruction, far less shader code (heydemoura/EglantinePS5 patch `0013`, adapted to this core) |
+| 0037 | Controller callbacks are registered once the applet resource exists: a motion sample during boot crashed the app |
+| 0038 | Task and mesh stages get the push constant range (Orchid `faa12fdbb2`, from Zortos and Eglantine PR 472) |
+| 0039 | Reused GPU memory ranges are mapped again when their pages changed (Aubépine `92fe737e62`, from Purebuilt/AMDEGL `f6fba4f`) |
+| 0040 | The syncpoint page acknowledges requests against values read after them (jpasqui `04f849c9bb`, without its trace) |
+| 0041 | The GPU thread wakes for new submissions while channels wait on semaphores (Orchid `b15e4257b5`) |
+| 0042 | Each memory manager's reference counts are sized to its own region (Orchid `d47bb55f34`, from exploitizm) |
+| 0043 | Syncpoint actions are identified by id, so a late cancel cannot remove a newer one (Orchid `8837a265cc`, from Zortos and Eglantine PR 472; tests left out) |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
