@@ -113,6 +113,9 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0041 | The GPU thread wakes for new submissions while channels wait on semaphores (Orchid `b15e4257b5`) |
 | 0042 | Each memory manager's reference counts are sized to its own region (Orchid `d47bb55f34`, from exploitizm) |
 | 0043 | Syncpoint actions are identified by id, so a late cancel cannot remove a newer one (Orchid `8837a265cc`, from Zortos and Eglantine PR 472; tests left out) |
+| 0044 | The Legend of Zelda: Ocarina of Time's native programs and upscale stand-in (Eglantine PR 614, from A-Man-With-A-Plan-dev) |
+| 0045 | Ocarina of Time's GPU-only regions are backed whole (Aubépine `24b7b61718`, adapted) |
+| 0046 | Mario Kart World runs without task and mesh draws, which hang the PS5's GPU |
 
 Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
