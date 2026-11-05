@@ -5,12 +5,16 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
 generated = cache / 'native-local/headless'
-development = 'EDEN_DEV_PROFILE:BOOL=ON' in (generated.parent / 'CMakeCache.txt').read_text()
+cmake_cache = (generated.parent / 'CMakeCache.txt').read_text()
+development = 'EDEN_DEV_PROFILE:BOOL=ON' in cmake_cache
+# EDEN_MKW_DIAGNOSTICS builds time each JIT run (headless/CMakeLists.txt, the MKW probe).
+mkw_diagnostics = 'EDEN_MKW_DIAGNOSTICS:BOOL=ON' in cmake_cache
 
 for name in ('a32_interface.cpp', 'a64_interface.cpp', 'block_of_code.cpp',
              'arm_dynarmic_32.cpp', 'arm_dynarmic_64.cpp'):
     source = (generated / name).read_text()
-    assert 'Eden::Performance::Timer' not in source
+    if not mkw_diagnostics:
+        assert 'Eden::Performance::Timer' not in source, name
     if not development:
         assert 'Eden::Performance::SampleCpu' not in source
     assert 'Eden::Performance::cpu_state' not in source

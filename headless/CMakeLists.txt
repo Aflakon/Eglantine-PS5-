@@ -722,7 +722,9 @@ foreach(bits 32 64)
           string(REPLACE "std::uint32_t(16_MiB)" "std::uint32_t(${jit_cache_sizes})" wrapper "${wrapper}")
       endif()
     set(derived "${PORT_BUILD_DIR}/arm_dynarmic_${bits}.cpp")
-    # Temporary MKW dispatch-latency probe, without enabling the full DEV profile.
+    # Temporary MKW dispatch-latency probe, without enabling the full DEV profile. Only in
+    # EDEN_MKW_DIAGNOSTICS builds: it times every JIT run, which release builds must not
+    # (tools/check-performance.py).
     if(bits EQUAL 64)
         set(mkw_exit_pc "m_jit->GetPC()")
         set(mkw_slow_run "    ::Eden::Performance::MkwSlowRun(mkw_tid, ::Eden::Performance::NowNs(), ::Eden::Performance::NowNs() - mkw_start, static_cast<unsigned>(mkw_halt), *m_jit, m_cb->m_memory);\n")
@@ -730,7 +732,7 @@ foreach(bits 32 64)
         set(mkw_exit_pc "m_jit->Regs()[15]")
         set(mkw_slow_run "")
     endif()
-    if(NOT EDEN_DEV_PROFILE)
+    if(EDEN_MKW_DIAGNOSTICS AND NOT EDEN_DEV_PROFILE)
         string(PREPEND wrapper "#include \"${EDEN_PORT_DIR}/performance.h\"\n#include \"core/hle/kernel/k_thread.h\"\n")
         string(REPLACE "    return TranslateHaltReason(m_jit->Run());"
             "    const auto mkw_tid = thread ? thread->GetThreadId() : 0;\n    ::Eden::Performance::NoteRunning(mkw_tid, ::Eden::Performance::NowNs());\n    ::Eden::Performance::Timer mkw_run_timer(::Eden::Performance::mkw_guest_run[mkw_tid < 512 ? mkw_tid : 511]);\n    const auto mkw_start = ::Eden::Performance::NowNs();\n    const auto mkw_halt = m_jit->Run();\n    ::Eden::Performance::MkwRecordRunExit(mkw_tid, ${mkw_exit_pc}, ::Eden::Performance::NowNs() - mkw_start);\n${mkw_slow_run}    return TranslateHaltReason(mkw_halt);"

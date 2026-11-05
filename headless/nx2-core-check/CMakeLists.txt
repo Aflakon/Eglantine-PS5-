@@ -34,5 +34,11 @@ add_executable(nx2-core-check ${ampere_tests}
     "${EDEN_SOURCE}/src/tests/video_core/memory_budget.cpp"
     "${EDEN_SOURCE}/src/tests/video_core/query_region_visit.cpp")
 file(GLOB boost_includes "${DEPENDENCY_SOURCE}/.cache/cpm/boost/*/libs/*/include")
-target_include_directories(nx2-core-check PRIVATE "${EDEN_SOURCE}/src" "${FMT_INCLUDE}" ${boost_includes})
+# Eden's pinned Vulkan headers (sparse_image_policy.h), not whatever the host has installed.
+file(GLOB vulkan_includes "${DEPENDENCY_SOURCE}/.cache/cpm/vulkanheaders/*/include")
+if(NOT vulkan_includes)
+    message(FATAL_ERROR "Eden's Vulkan headers are not in ${DEPENDENCY_SOURCE}/.cache/cpm/vulkanheaders")
+endif()
+target_include_directories(nx2-core-check PRIVATE "${EDEN_SOURCE}/src" "${FMT_INCLUDE}" ${boost_includes}
+    ${vulkan_includes})
 target_link_libraries(nx2-core-check PRIVATE Catch2::Catch2WithMain)
