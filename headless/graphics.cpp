@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "performance.h"
+#include "ordered_read_trace.h"
 #include "assets_dir.h"
 #include <glad/glad.h>
 #include <EGL/egl.h>
@@ -27,6 +28,7 @@
 #include "core/frontend/graphics_context.h"
 #include "core/perf_stats.h"
 #include "video_core/renderer_base.h"
+#include "video_core/gpu_split.h"
 
 // Match the SDK native application's shim: Mesa's C TLS is initialized by
 // compiler-rt; it has no additional C++ per-thread initializer.
@@ -58,7 +60,9 @@ HudClock vulkan_hud_clock;
 HudClock vulkan_hud_output_clock;
 HudSnapshot vulkan_hud;
 double vulkan_hud_stats_time{}, vulkan_hud_speed{};
-bool vulkan_loading{};
+// Read by the GPU thread, cleared by whichever thread composites the first guest frame (the
+// split GPU thread's back, when it runs).
+std::atomic<bool> vulkan_loading{};
 double vulkan_loading_start{-1};
 unsigned vulkan_loading_frames{};
 LoadingPace vulkan_loading_pace;
@@ -512,7 +516,19 @@ bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
         if (first) vulkan_loading_start = now;
         if (vulkan_loading_pace.Due(now, idle)) {
             vulkan_hud = MakeLoadingSnapshot(now - vulkan_loading_start + LoadingCalm());
-            PresentVulkanLoading(renderer);
+            // With the split GPU thread the renderer belongs to the back thread (gpu_split.h):
+            // presenting from the front raced its composites in the scheduler and the blit
+            // screen's layers (a descriptor set allocation failed, then a null layer crashed).
+            // Send the present through the ring so it runs in order with the guest's work.
+            if (auto& split = VideoCommon::GpuSplit::Get();
+                split.Active() && !VideoCommon::GpuSplit::IsBackThread()) {
+                split.DeferFunction([&renderer] {
+                    if (vulkan_loading.load(std::memory_order_relaxed)) PresentVulkanLoading(renderer);
+                });
+                split.Publish();
+            } else {
+                PresentVulkanLoading(renderer);
+            }
             ++vulkan_loading_frames;
             if (first) sceSystemServiceHideSplashScreen();
         }
@@ -649,6 +665,9 @@ void GraphicsWindow::OnFrameDisplayed() {
                             RoomPingMilliseconds());
 #endif
         ++frame_total;
+        Eden::OrderedReadTrace::Frame(frame_total,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
         // What a recorded controller session counts frames by (gameplay_test.h): the input
         // worker runs on another thread, so it reads a copy rather than the member.
         Display::gameplay_frame.store(frame_total, std::memory_order_relaxed);
@@ -681,6 +700,7 @@ void GraphicsWindow::OnFrameDisplayed() {
                 interval_hist = {};
 #endif
                 Eden::Performance::ReportVulkan();
+                Eden::Performance::ReportGuestRun();
 #ifdef EDEN_DEV_PROFILE
                 // Composite runs on the GPU thread, so its owner CPU clock is valid here.
                 Eden::Performance::ReportGpuThread(frame_total);

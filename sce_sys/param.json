@@ -10,7 +10,7 @@
   "conceptId": "98515",
   "contentBadgeType": 1,
   "contentId": "UP9000-PPSA98515_00-EGLANTINEPS50001",
-  "contentVersion": "01.219.006",
+  "contentVersion": "01.219.007",
   "downloadDataSize": 256,
   "gameIntent": {
     "permittedIntents": [
@@ -34,5 +34,8 @@
   "requiredSystemSoftwareVersion": "0x0000000000000000",
   "sdkVersion": "0x0000000000000000",
   "titleId": "PPSA98515",
-  "versionFileUri": ""
+  "versionFileUri": "",
+  "kernel": {
+    "cpuPageTableSize": 134217728
+  }
 }

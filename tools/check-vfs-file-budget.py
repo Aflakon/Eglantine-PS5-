@@ -22,6 +22,7 @@ program = r'''
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -59,6 +60,7 @@ struct RealVfsFilesystem {
     using List = Common::IntrusiveListBaseTraits<FileReference>::ListType;
     List open_references, closed_references;
     std::mutex list_lock;
+    std::map<std::string, std::weak_ptr<FS::IOFile>, std::less<>> cache;
     size_t num_open_files = 0;
     bool in_dtor = false;
     std::unique_lock<std::mutex> RefreshReference(const std::string&, OpenMode, FileReference&);
@@ -99,6 +101,11 @@ int main(int argc, char** argv) {
     for (auto file : reserved) std::fclose(file);
 }
 '''.replace('METHODS', methods)
+if 'cache.find(path)' in methods:
+    program = program.replace('void DropReference(std::unique_ptr<FileReference>&&);',
+                              'void DropReference(std::unique_ptr<FileReference>&&, const std::string&);')
+    program = program.replace('fs.DropReference(std::move(ref));',
+                              'fs.DropReference(std::move(ref), argv[1]);')
 with tempfile.TemporaryDirectory(prefix='eden-vfs-budget-') as temporary:
     folder = Path(temporary)
     (folder / 'common').mkdir()

@@ -122,6 +122,10 @@ Una build homebrew para PS5 que apila tres capas, siempre actualizadas en este o
 
 Core actual: **Eglantine `3081c8e`** (`nx2`, `build-219`, 4-nov-2026).
 
+A Switch 2 game (title IDs that start with `0400`) starts from the emulator core's own defaults for its games instead of the general values: **Faster GPU emulation** on and **Reactive flushing** off. Without them the core's second GPU thread stays off and every GPU fence waits for the console's GPU; Mario Kart World's title screen ran at about 11 FPS with the general defaults and about 24 FPS with these (see [docs/MKW-TITLE-FPS.md](docs/MKW-TITLE-FPS.md)). The game's own values, set in the Library, still win.
+
+A game can have its own values: in its settings, **Performance** (see [Settings per game](#settings-per-game)). In the settings file, `"performance"` at the top level is what the switches set, and one inside a game's entry under `"games"` is that game's, whose values go first:
+
 ## Estado (versión honesta)
 
 | Punto | Estado |
