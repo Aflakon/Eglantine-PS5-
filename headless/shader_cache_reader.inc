@@ -25,7 +25,8 @@ void CheckEnvironment(std::ifstream& file, std::streamoff end) {
 void LoadPipelines(
     std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
-    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics) {
+    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics,
+    bool with_mesh_state) {
     // A pipeline has at most this many shaders (two vertex programs, tessellation control and
     // evaluation, geometry, fragment).
     constexpr u32 kMostShaders = 6;
@@ -72,7 +73,8 @@ void LoadPipelines(
             std::vector<FileEnvironment> envs(num_envs);
             for (FileEnvironment& env : envs) {
                 CheckEnvironment(file, end);
-                env.Deserialize(file);
+                // vulkan_mesh.bin: task and mesh programs carry their mesh state (patch 0071).
+                env.Deserialize(file, with_mesh_state);
             }
             if (envs.front().ShaderStage() == Shader::Stage::Compute) {
                 load_compute(file, std::move(envs.front()));

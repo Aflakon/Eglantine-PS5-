@@ -11,6 +11,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <xbyak/xbyak.h>
+// The heap's empty pieces back to the pool (headless/heap_arenas.inc); absent in host tools.
+extern "C" std::size_t eden_heap_trim(void) __attribute__((weak));
 namespace Common {
 void* AllocateMemoryPages(std::size_t) noexcept;
 void FreeMemoryPages(void*) noexcept;
@@ -110,6 +112,18 @@ inline Xbyak::Allocator* EdenJitAllocator() {
         // Memory behind the first `bytes` of a cache: asked before the JIT writes that far.
         void commit(std::uint8_t* pointer, std::size_t bytes) override {
             if (Common::CommitCodeRange(pointer, bytes)) return;
+            // Neither the pool nor the guest's reserve had a block: the heap's empty pieces go back,
+            // and this core waits up to 2 s while the graphics caches, which see the pool short,
+            // give memory back (a burst can take the pool for a moment).
+            std::fputs("JIT code cache: no memory for its next part; waiting for some\n", stderr);
+            for (int attempt = 1; attempt <= 100; ++attempt) {
+                if (attempt % 25 == 1 && eden_heap_trim) eden_heap_trim();
+                usleep(20000);
+                if (Common::CommitCodeRange(pointer, bytes)) {
+                    std::fprintf(stderr, "JIT code cache: memory found after %d ms\n", attempt * 20);
+                    return;
+                }
+            }
             std::fputs("JIT code cache: the console has no memory for its next part\n", stderr);
             std::abort();
         }

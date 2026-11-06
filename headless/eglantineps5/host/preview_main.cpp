@@ -532,6 +532,28 @@ void pictures(Stage &s)
     s.press({Key::down});
     s.wait(0.6f);
     s.shoot("18b-diagnostics-logs-at-once");
+    // Testing switches: the row, its list, a switch changed (not applied yet) and the confirmation.
+    s.press({Key::down});
+    s.wait(0.6f);
+    s.shoot("18c-diagnostics-testing");
+    s.press({Key::cross});
+    s.wait(0.8f);
+    s.shoot("18d-testing");
+    // Each switch's text under the list, down to the last one.
+    for (int row = 1; row < 10; ++row)
+    {
+        s.press({Key::down});
+        s.wait(0.4f);
+        s.shoot(("18d" + std::to_string(row) + "-testing-row").c_str());
+    }
+    s.press({Key::right});
+    s.wait(0.4f);
+    s.shoot("18e-testing-changed");
+    s.press({Key::cross});
+    s.wait(0.4f);
+    s.shoot("18f-testing-confirm");
+    s.press({Key::circle, Key::circle});
+    s.wait(0.8f);
     s.press({Key::circle, Key::down, Key::cross});
     s.wait(1.0f);
     s.shoot("19-game-files");

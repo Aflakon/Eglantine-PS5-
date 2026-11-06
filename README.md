@@ -31,7 +31,7 @@ A PS5 homebrew build that stacks three layers, always updated in this order:
 | 2 | **PS5 frontend** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (launcher, Vulkan/RADV port, packaging), built on BlackBearReloaded's ProsperoEden | This repository's full history is that project's; we rebase on its `main` and keep our changes on top. |
 | 3 | **NUP support** | `.nup` is Eglantine's single-file package (base game + update + DLC) | The library lists `.nup` files, runs them, and can **pack a game folder into a NUP** on the console. |
 
-Current core pin: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 2026-11-05).
+Current core pin: **Eglantine `0ca2032`** (`nx2`, `build-219` + 35 commits, 2026-11-05).
 
 ## Status (honest version)
 
@@ -42,9 +42,9 @@ Current core pin: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 2026
 | Handheld mode, 0.5x resolution | Not yet confirmed. Earlier failures were caused by a stale shader cache (see below), so they have to be retested. |
 | Update and DLC inside a NUP | Both load, and the Library shows them. Checked with Bananza: the game mounts its DLC (log: `NUP add-on 040074A01BF13001 mounted`) and its DLC menu shows 3.2.0 and DLC 1.0.0. The DLC's levels have not been played through yet. |
 | Super Mario Bros. Wonder NUP ("Switch 2 Edition + DLC") | The tested file runs as the Switch 1 game with update 1.2.0, and its DLC stays unused: the executables in that file are the Switch 1 build, and the DLC holds Switch 2 data. The Library still lists it. |
-| Mario Kart World (Switch 2) | Reaches its menu at about 20-25 fps (v1.219.014; task and mesh draws are off because they hang the PS5's GPU). It runs out of graphics memory after one or two minutes, and sometimes stops at 98% while loading: close the app and try again. |
-| The Legend of Zelda: Ocarina of Time (Switch 2) | Title screen and sound work. On v1.219.014 the picture stayed black during its movies and the game stopped after the intro; v1.219.015 carries fixes for both that have not been tried on a console yet. |
-| Donkey Kong Bananza on v1.219.014 | Crashed when many objects broke at once; v1.219.015 has the fix, not yet tried on a console. |
+| Mario Kart World (Switch 2) | With **Faster GPU emulation** on for the game, v1.219.018 reaches the race at 25-43 fps (0.5x resolution, handheld); with it off, gameplay runs at about 25 of its 30 fps (v1.219.016). Task and mesh draws are off because they hang the PS5's GPU. Every run so far ends after one to three minutes: out of memory (in a race the game itself holds about 5.9 GB), or once a freeze with the GPU thread stopped. The race crash was a single 352 MB request for four 85 MB terrain layers; v1.219.019 uploads those in groups of up to 128 MB, which worked, and then the JIT found no 16 MB block for its code cache while the game's 512 MB memory reserve sat unused. v1.219.020 takes the JIT's memory in 2 MB blocks, lends part of that reserve to the JIT and to a refused graphics allocation (half of it always stays for the game), and gives idle upload buffers back while memory is short (not run yet). Restart the app before each try. |
+| The Legend of Zelda: Ocarina of Time (Switch 2) | Plays at about 18 fps on v1.219.015 (one tester's console): its movies and the game show. Its upscaling networks take much of the GPU's time. |
+| Donkey Kong Bananza on v1.219.014 | Crashed when many objects broke at once; fixed since v1.219.015. A run on v1.219.016 played at 12-15 fps without that crash. |
 | Other Switch 2 titles | Some fail early. Nothing is promised beyond what is listed here. |
 | Frame generation (Lossless Scaling) | Compiled in, but pointless at a 20 fps base. |
 
@@ -91,7 +91,7 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0015 | Donkey Kong Bananza's upscaler slots (from [Orchid](https://github.com/MythosOfs/Orchid) `48d369310`, MythosOfs) |
 | 0016 | Draws that sample their own colour target read a copy (Orchid `a49c81063`, MythosOfs) |
 | 0017 | Page checks skipped for buffer ranges with no new CPU writes (Orchid `a3be6e11b`, `5ffe9eb53`, `4476c8671`, `2e0b577bb`; from monteger8/Eglantine-DKB, Claude for adamd) |
-| 0018 | GPU split: wakes a back thread that stayed parked (Orchid `1e4e0e82b`, from godpow/Eglantine, godpow) |
+| 0018 | GPU split: wakes a back thread that stayed parked, also for the idle-hook request the core added in PR 639 (Orchid `1e4e0e82b`, from godpow/Eglantine, godpow) |
 | 0019 | Log a guest thread that waits over 5 s for the GPU thread |
 | 0020 | Log a kernel call that refuses an enum value (games abort on it with 2001-0120) |
 | 0021 | Donkey Kong Bananza's terrain counters (heydemoura/EglantinePS5 patch `0008`) |
@@ -119,16 +119,46 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0044 | The Legend of Zelda: Ocarina of Time's native programs and upscale stand-in (Eglantine PR 614, from A-Man-With-A-Plan-dev) |
 | 0045 | Ocarina of Time's GPU-only regions are backed whole (Aubépine `24b7b61718`, adapted) |
 | 0046 | Mario Kart World runs without task and mesh draws, which hang the PS5's GPU |
-| 0047 | Native compute storage buffers sized from their descriptors outside DLSS passes, far fewer readbacks; Mario Kart World's present pacing (Eglantine PR 609) |
+| 0047 | Mario Kart World's present pacing follows the presenting process (Eglantine PR 609; its buffer sizing part is in the core since PR 571) |
 | 0048 | Command lists submitted behind a queued GPU map are copied after the map, not as zeros (Eglantine PR 543, merged with this core's empty-list handling) |
 | 0049 | Fence releases from the puller run on the split GPU thread's back thread (Aubépine `7e20d36e9e`, after Lichii #70: Ocarina of Time stopped after its intro) |
 | 0050 | Buffer flushes the front GPU thread needs run on the back thread, which owns the Vulkan scheduler (Aubépine `4d3b54834e`, after Lichii `12db3f599`; Donkey Kong Bananza crashed in `CopyBuffer`, Eglantine issue 636) |
 | 0051 | Ocarina of Time's upscaling networks run through the native HMMA lowering instead of the plain upscale stand-in (its movies were black); `EDEN_NX2_TENSOR=0` turns this off |
 | 0052 | Multiplies by 0 and 1 are folded so Ocarina of Time's sky ambient finds its buffer; pipeline cache versions bumped (Orchid `636c5fb385`) |
+| 0053 | The GPU thread profile (`EDEN_NX2_GPU_PROFILE`) is read again when the GPU thread starts, so the testing switches can turn it on |
+| 0055 | GPU memory layout ranges cached until the page table changes (Jonas, `47b4169b3f`) |
+| 0056 | At fences only the Preflushable parts of a GPU write are copied back, the rest traps reads (Jonas, `5d742e369e`) |
+| 0057 | Switch 2 games: CPU writes onto GPU-written pages go into the buffer instead of copying the page back first, which waited for the GPU; `EDEN_NX2_INLINE_PAGE_WRITES=0` turns it off (Zarigis, `575d0a5bfd`) |
+| 0058 | The split GPU thread's front runs its sync fences, macro DMA read flushes and GPU memory maps on the back thread (kraibse with Duck912 and Zortos, `3087c1cf07`, merged with 0049 and 0050) |
+| 0059 | Deferred work is submitted before waiting on our own fence (kraibse, `1b594aa6b6`) |
+| 0060 | With delayed fence operations, fences are released again while an acquire waits (kraibse, `90ff431884`) |
+| 0061 | GPU data is not copied back over newer CPU writes (Duck912, `fe2cd8be2b`) |
+| 0062 | 4096 continuous range answers kept per thread (Duck912, `292a68df46`) |
+| 0063 | Buffer usage masks for empty and partial blocks (zortos293, `5778922694`) |
+| 0064 | Untouched buffer usage trackers are not reset (zortos293, `1b7995d89c`) |
+| 0065 | Unchanged words are skipped while binding clean buffers (zortos293, `1725659895`) |
+| 0066 | Storage buffer bindings cached per page table serial (Matt Artist, from Frizti/Lichii `ddf7952a14` via Duck912, `c8415d0e80`; adapted to this core's binding sizes) |
+| 0067 | Only compute and DMA methods that write memory count as split writers (Frizti, `dc5938b8bb`) |
+| 0068 | GPU-written page marks batched by bitmap word (zortos293, `abb9ae8426`) |
+| 0069 | The last memory layout interval is reused during draw setup (zortos293, `d713f4462a`) |
+| 0070 | With the GPU thread profile on, the guest thread watchdog writes which GPU thread stopped going round its loop and the zone it stopped in |
+| 0071 | Task and mesh pipelines are kept in their own disk cache file with their mesh state, so they are not built again every session (Duck912, `bc121caf3e`, based on Frizti/Lichii `3a2c8980ad`) |
+| 0072 | Layers of a large layered texture are uploaded in groups of up to 128 MB, each finished before the next reuses its staging buffer: four of Mario Kart World's 85 MB terrain layers asked for 352 MB at once and ran the race out of memory |
+| 0073 | The GPU thread profile splits "push" into command lists, puller methods, channel binds and list ends, and a GPU thread that comes back with a new game takes its old watchdog place (the old one gave a false alarm) |
+| 0074 | ReinterpretImage copies a combined depth-stencil image through its depth aspect only, and to the layout the image is in (cr1ckt, Lichii #89; it lost the device on NVIDIA) |
+| 0075 | The alpha test reference is rounded to 1/255 in the pipeline key, so a fading reference no longer builds a new pipeline every frame (zortos293's port of Eglantine PR #544) |
+| 0076 | The occlusion counter is paused, not reset, at each submission (Kaj, Lichii #121; Ocarina of Time's white flashes) |
+| 0077 | Nested returns are counted before demotes move to the end of a fragment program (Inc0rporate, Lichii #127; black scenes on AMD GPUs) |
+| 0078 | A new render target that a clear overwrites whole is not uploaded from guest memory first (Kaj, Lichii #141) |
+| 0079 | Draws recorded after a graphics pipeline that failed to build are dropped instead of reaching the driver (Felipe Lima, Lichii #142) |
+| 0080 | Dirty memory gatherers are serialized: video decoding also gathers off the GPU thread (Paulo Tumabing, core part of Lichii #138; a VP9 movie crash) |
+| 0081 | No lost wake when worker tasks are cancelled (Zortos, core part of Lichii #290) |
 
-Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
+0074-0081 come from [zortos293/Lichii](https://github.com/zortos293/Lichii) (`nx2`), an Eglantine-based emulator. 0055-0069 and 0071 come from Eglantine's branch `oot-optimization-fixes` (Djihads80/Eglantine), not yet in `nx2`; its idle spin commit `8dc1e6e9c4` is left out, because the PS5 frontend already spins about 100 µs before a guest core sleeps, and its front flush commit `727a9a4eb4` is 0050. Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
 Logs on the console: `/data/eglantineps5/user/log/eden_log.txt` (and `.old.txt`), `/data/eglantineps5/logs/`. Settings: `/data/eglantineps5/config/eglantineps5.json`.
+
+**Testing switches:** Settings > Diagnostics > Testing switches changes the emulator's switches (`EDEN_NX2_...`) from the menu: upscaling networks, task and mesh draws, the split GPU thread, the texture memory limit, the texture cache log, the GPU thread profile, CPU writes on GPU pages and others; each shows which of its choices is the default. They are saved to `/data/eglantineps5/config/env.txt` (one `NAME=VALUE` per line, which can also be edited by hand) and apply from the next start, so the app asks to confirm and closes.
 
 ## Updating and building
 
@@ -156,7 +186,7 @@ Una build homebrew para PS5 que apila tres capas, siempre actualizadas en este o
 | 2 | **Frontend de PS5** | [heydemoura/EglantinePS5](https://github.com/heydemoura/EglantinePS5) (lanzador, port de Vulkan/RADV, empaquetado), basado en ProsperoEden de BlackBearReloaded | El historial de este repo es el de ese proyecto; rebaseamos sobre su `main` y mantenemos nuestros cambios encima. |
 | 3 | **Soporte NUP** | `.nup` es el paquete de un solo fichero de Eglantine (juego base + update + DLC) | La biblioteca lista y ejecuta `.nup` y puede **empaquetar una carpeta de juego en un NUP** en la propia consola. |
 
-Core actual: **Eglantine `6051d36`** (`nx2`, `build-219` + 18 commits, 5-nov-2026).
+Core actual: **Eglantine `0ca2032`** (`nx2`, `build-219` + 35 commits, 5-nov-2026).
 
 A Switch 2 game (title IDs that start with `0400`) starts from the emulator core's own defaults for its games instead of the general values: **Faster GPU emulation** on and **Reactive flushing** off. Without them the core's second GPU thread stays off and every GPU fence waits for the console's GPU; Mario Kart World's title screen ran at about 11 FPS with the general defaults and about 24 FPS with these (see [docs/MKW-TITLE-FPS.md](docs/MKW-TITLE-FPS.md)). The game's own values, set in the Library, still win.
 
@@ -171,9 +201,9 @@ A game can have its own values: in its settings, **Performance** (see [Settings 
 | Modo portátil, resolución 0,5x | Sin confirmar. Los fallos anteriores venían de una caché de shaders antigua (ver abajo), así que hay que repetir la prueba. |
 | Update y DLC dentro de un NUP | Se cargan los dos y la biblioteca los muestra. Comprobado con Bananza: el juego monta su DLC (log: `NUP add-on 040074A01BF13001 mounted`) y su menú de DLC muestra 3.2.0 y DLC 1.0.0. Los niveles del DLC aún no se han jugado a fondo. |
 | NUP de Super Mario Bros. Wonder («Switch 2 Edition + DLC») | El archivo probado se ejecuta como el juego de Switch 1 con la update 1.2.0, y su DLC queda sin usar: los ejecutables de ese archivo son la versión de Switch 1 y el DLC contiene datos de Switch 2. La biblioteca lo sigue listando. |
-| Mario Kart World (Switch 2) | Llega a su menú a unos 20-25 fps (v1.219.014; los dibujos task y mesh están desactivados porque cuelgan la GPU de la PS5). Se queda sin memoria gráfica al cabo de uno o dos minutos, y a veces se para al 98 % de la carga: cierra la app y vuelve a intentarlo. |
-| The Legend of Zelda: Ocarina of Time (Switch 2) | La pantalla de título y el sonido funcionan. En la v1.219.014 la imagen se quedaba en negro durante sus vídeos y el juego se paraba tras la intro; la v1.219.015 lleva arreglos para ambas cosas que aún no se han probado en una consola. |
-| Donkey Kong Bananza en la v1.219.014 | Se cerraba al romperse muchos objetos a la vez; la v1.219.015 lleva el arreglo, aún sin probar en una consola. |
+| Mario Kart World (Switch 2) | Con **Emulación de GPU más rápida** activada para el juego, la v1.219.018 llega a la carrera a 25-43 fps (resolución 0,5x, modo portátil); sin ella, la partida va a unos 25 de sus 30 fps (v1.219.016). Los dibujos task y mesh están desactivados porque cuelgan la GPU de la PS5. Hasta ahora todas las partidas acaban a los uno a tres minutos: sin memoria (en carrera el juego ocupa unos 5,9 GB) o, una vez, colgado con el hilo de la GPU parado. El cierre en carrera fue una petición de 352 MB para cuatro capas de terreno de 85 MB; la v1.219.019 las sube en grupos de 128 MB como máximo, cosa que funcionó, y después el JIT no encontró un bloque de 16 MB para su caché de código con la reserva de 512 MB del juego sin usar. La v1.219.020 da al JIT su memoria en bloques de 2 MB, presta parte de esa reserva al JIT y a una petición gráfica rechazada (siempre queda la mitad para el juego) y devuelve los búferes de subida sin uso cuando falta memoria (sin probar aún). Reinicia la app antes de cada intento. |
+| The Legend of Zelda: Ocarina of Time (Switch 2) | Se juega a unos 18 fps en la v1.219.015 (en la consola de un probador): se ven sus vídeos y el juego. Sus redes de escalado ocupan buena parte del tiempo de la GPU. |
+| Donkey Kong Bananza en la v1.219.014 | Se cerraba al romperse muchos objetos a la vez; arreglado desde la v1.219.015. Una partida en la v1.219.016 fue a 12-15 fps sin ese cierre. |
 | Otros juegos de Switch 2 | Algunos fallan pronto. No prometemos nada más allá de lo que aparece aquí. |
 | Generación de fotogramas (Lossless Scaling) | Incluida, pero sin sentido con una base de 20 fps. |
 
@@ -206,6 +236,8 @@ En la consola, el driver de Vulkan colgaba un juego de Switch 2 cuando arrancaba
 Todos los cambios al core del emulador son parches simples en [`tools/eglantine-patches/`](tools/eglantine-patches), que se aplican solos al compilar; si uno deja de aplicar, la build lo dice. La tabla de parches está en la sección en inglés. Falta el 0006 a propósito: las 32 storage buffers por etapa ya vienen en el core. Los cambios del frontend (NUP en la biblioteca, «empaquetar a NUP», `.gitmodules` apuntando al core de Djihads80, anclajes del port de Vulkan para el core más nuevo, volcado del log línea a línea) son commits normales encima del frontend original.
 
 Logs en la consola: `/data/eglantineps5/user/log/eden_log.txt` (y `.old.txt`), `/data/eglantineps5/logs/`. Ajustes: `/data/eglantineps5/config/eglantineps5.json`.
+
+**Interruptores de prueba:** Ajustes > Diagnóstico > Interruptores de prueba cambia desde el menú los interruptores del emulador (`EDEN_NX2_...`): redes de escalado, dibujos task y mesh, el hilo de GPU dividido, el límite de memoria de texturas, el registro de texturas, el perfil del hilo de GPU, las escrituras de CPU en páginas de GPU y otros; cada uno indica cuál de sus opciones es la de por defecto. Se guardan en `/data/eglantineps5/config/env.txt` (un `NOMBRE=VALOR` por línea, que también se puede editar a mano) y se aplican desde el siguiente arranque, así que la app pide confirmación y se cierra.
 
 ## Actualizar y compilar
 

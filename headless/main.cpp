@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <exception>
 #include "assets_dir.h"
+#include "test_switches.h"
 #include "forwarded_launch.h"
 #include "gpu_failure.h"
 #include "guest_fault.h"
@@ -513,6 +514,12 @@ int main(int argc, char** argv) {
 #endif
         setenv("EDEN_NX2_SPARSE_UNBACKED", "1", 1);
         setenv("EDEN_HOST_RESERVE_TRANSFER", "1", 1);
+        // Settings > Diagnostics > Testing switches (test_switches.h): the same NAME=VALUE lines,
+        // chosen in the menu. The app folder's env.txt below wins over them.
+        for (const auto& [name, value] : Eden::TestSwitches::Read()) {
+            setenv(name.c_str(), value.c_str(), 1);
+            std::printf("EDEN_ENV %s=%s (testing switches)\n", name.c_str(), value.c_str());
+        }
         {
             // Development: env.txt in the app folder sets core switches (NAME=VALUE per line,
             // e.g. EDEN_NX2_GPU_PROFILE=1) before the core reads them. Absent in a release.

@@ -2449,3 +2449,148 @@ msgstr "Calculando el tiempo"
 #: pe/ui/remote.cpp
 msgid "The reading you cancelled is still ending. Its files are kept; try again in a moment."
 msgstr "La lectura que cancelaste aún está terminando. Sus archivos se guardan; intenta de nuevo en un momento."
+
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Testing switches"
+msgstr "Interruptores de prueba"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "TESTING SWITCHES"
+msgstr "INTERRUPTORES DE PRUEBA"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Testing switches on"
+msgstr "Interruptores de prueba activos"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "{0} on"
+msgstr "{0} activos"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Switches that change how the emulator works in every game, for tests."
+msgstr "Interruptores que cambian cómo funciona el emulador en todos los juegos, para pruebas."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "For tests: they change how the emulator works in every game."
+msgstr "Para pruebas: cambian cómo funciona el emulador en todos los juegos."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Upscaling networks"
+msgstr "Redes de escalado"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Upscaling with a neural network, on by default in Ocarina of Time and Donkey Kong Bananza. Off measures what it costs: faster, but their image breaks (black or purple)."
+msgstr "Escalado con red neuronal, activo de forma predeterminada en Ocarina of Time y Donkey Kong Bananza. «No» sirve para medir lo que cuesta: más rápido, pero su imagen se rompe (negra o morada)."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Default"
+msgstr "Predeterminado"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Every game"
+msgstr "Todos los juegos"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Task and mesh draws"
+msgstr "Dibujos task y mesh"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Off by default in Mario Kart World, where they hang the GPU. Off skips them in every game; On draws them in Mario Kart World too."
+msgstr "De forma predeterminada no se dibujan en Mario Kart World, donde cuelgan la GPU. «No»: se omiten en todos los juegos; «Sí»: también se dibujan en Mario Kart World."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Split GPU thread"
+msgstr "Hilo de GPU dividido"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Runs the GPU's commands on two threads. Off uses one: slower, and a test when a game freezes or crashes in the GPU."
+msgstr "Ejecuta los comandos de la GPU en dos hilos. «No» usa uno: más lento, y sirve de prueba si un juego se congela o se cierra en la GPU."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Macros on the second thread"
+msgstr "Macros en el segundo hilo"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Texture memory limit"
+msgstr "Límite de memoria de texturas"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Where the texture cache starts freeing memory. A lower limit helps a game that runs out of memory, and it can stutter more."
+msgstr "Dónde empieza la caché de texturas a liberar memoria. Un límite más bajo ayuda a un juego que se queda sin memoria, y puede dar más tirones."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "GPU thread profile"
+msgstr "Perfil del hilo de GPU"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Writes to the log, every 10 seconds, where the GPU thread spends its time. A little slower."
+msgstr "Escribe en el registro, cada 10 segundos, en qué gasta el tiempo el hilo de GPU. Algo más lento."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Fence batching"
+msgstr "Agrupar fences"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Groups the GPU's fences. Off makes them one at a time: slower, for comparisons."
+msgstr "Agrupa los fences de la GPU. «No» los hace de uno en uno: más lento, para comparar."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Native matrix lowering"
+msgstr "Traducción nativa de matrices"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "How neural networks are translated for the PS5's GPU. Off uses the older, larger code."
+msgstr "Cómo se traducen las redes neuronales para la GPU de la PS5. «No» usa el código antiguo, más grande."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "GPU-only memory"
+msgstr "Memoria exclusiva de GPU"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "By default it gets pages as they are written. Whole backs it all at once: more memory, and a test for wrong colours."
+msgstr "De forma predeterminada recibe páginas a medida que se escriben. «Entera» la respalda toda de una vez: más memoria, y sirve para probar colores erróneos."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Whole"
+msgstr "Entera"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Custom ({0})"
+msgstr "Personalizado ({0})"
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Nothing to apply: change a switch with Left and Right first."
+msgstr "Nada que aplicar: cambia primero un interruptor con Izquierda y Derecha."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Apply the changes? EglantinePS5 closes, and they take effect when you open it again. Press again to confirm."
+msgstr "¿Aplicar los cambios? EglantinePS5 se cerrará y se aplicarán al volver a abrirla. Presiona de nuevo para confirmar."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Saved. EglantinePS5 closes now: open it again to use the switches."
+msgstr "Guardado. EglantinePS5 se cierra ahora: vuelve a abrirla para usar los interruptores."
+
+#: pe/ui/testing.cpp, pe/ui/settings.cpp
+msgid "Apply"
+msgstr "Aplicar"
+
+#: pe/ui/testing.cpp
+msgid "{0} (default)"
+msgstr "{0} (predeterminado)"
+
+#: pe/ui/testing.cpp
+msgid "Texture cache log"
+msgstr "Registro de texturas"
+
+#: pe/ui/testing.cpp
+msgid "Writes to the log, every 600 frames, the graphics memory in use against the texture cache's limits, and how much of it is textures."
+msgstr "Escribe en el registro, cada 600 fotogramas, la memoria gráfica en uso frente a los límites de la caché de texturas, y cuánta es de texturas."
+
+#: pe/ui/testing.cpp
+msgid "CPU writes on GPU pages"
+msgstr "Escrituras de CPU en páginas de GPU"
+
+#: pe/ui/testing.cpp
+msgid "By default (Switch 2 games) the CPU's bytes go straight into the GPU's buffer, without first copying the page back, which waited for the GPU. Off: the old copy."
+msgstr "Lo predeterminado (juegos de Switch 2): los bytes de la CPU van directos al búfer de la GPU, sin copiar antes la página, que esperaba a la GPU. «No»: la copia de antes."

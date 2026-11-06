@@ -228,6 +228,7 @@ void Launcher::draw_settings(Canvas &c)
         prefs_.mute ? tr("Muted") : percent(prefs_.volume),
         prefs_.vibration ? tr("Vibration on") : tr("Vibration off"),
         prefs_.large_text || prefs_.high_contrast || prefs_.reduce_motion ? tr("On") : "",
+        testing_active() > 0      ? tr("Testing switches on") :
         prefs_.detailed_logging ? tr("Detailed logs on") : prefs_.immediate_logs ? tr("On") : "",
         "",
         !sources_.configured ? std::string{tr("Not set up")} :
@@ -329,7 +330,9 @@ void Launcher::draw_settings(Canvas &c)
     case kDiagnostics:
         about = tr("Setup status and detailed logs.");
         lines = {{tr("SETUP"), home_.setup_ready ? tr("Ready") : tr("Needs attention")},
-                 {tr("DETAILED LOGS"), on_off(prefs_.detailed_logging)}};
+                 {tr("DETAILED LOGS"), on_off(prefs_.detailed_logging)},
+                 {tr("TESTING SWITCHES"), testing_active() == 0 ? std::string{tr("None")} :
+                                          fill(tr("{0} on"), {std::to_string(testing_active())})}};
         break;
     case kFiles:
         about = tr("The folder that holds your keys, firmware and games.");
@@ -454,8 +457,9 @@ int Launcher::dialog_rows(Modal modal) const
                         !games_[static_cast<std::size_t>(library_.selected)].sources.empty() &&
                         !games_[static_cast<std::size_t>(library_.selected)].remote ? 1 : 0);
     case Modal::controls:     // vibration, the button mapping
-    case Modal::diagnostics:  // detailed logging, logs written at once
         return 2;
+    case Modal::diagnostics:  // detailed logging, logs written at once, the testing switches
+        return 3;
     default:
         return 1;
     }
@@ -477,7 +481,7 @@ float Launcher::dialog_row_top(Modal modal, int row) const
     case Modal::controls: // under the shortcuts
         return 560.0f + 96.0f * static_cast<float>(row);
     case Modal::diagnostics: // under the setup's state
-        return 500.0f + 102.0f * static_cast<float>(row);
+        return 452.0f + 96.0f * static_cast<float>(row);
     default:
         return 670.0f;
     }
@@ -606,6 +610,13 @@ void Launcher::press_dialog(Key key)
             prefs_.reduce_motion = !prefs_.reduce_motion;
         break;
     case Modal::diagnostics:
+        if (option_ == 2)
+        {
+            // The testing switches have their own list (testing.cpp).
+            if (activate)
+                open_testing();
+            return;
+        }
         if (option_ == 0)
             prefs_.detailed_logging = !prefs_.detailed_logging;
         else
@@ -854,20 +865,28 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
     default:
     {
         text_block(c, services_.setup_details(), 592.0f, baseline(364.0f, 40.0f, theme::kText24),
-                   theme::kText24, 40.0f, theme::kBody, 736.0f, 3, kShrink);
+                   theme::kText24, 40.0f, theme::kBody, 736.0f, 2, kShrink);
         static constexpr const char *kNames[] = {TR("Detailed logging"), TR("Write logs at once")};
         static constexpr const char *kAbout[] = {
             TR("Eden's debug messages in the logs of a game."),
-            TR("Keeps the last line before a crash, but games stutter. From the next start.")};
+            TR("Keeps the last line before a crash, but games stutter. From the next start."),
+            TR("Switches that change how the emulator works in every game, for tests.")};
         for (int row = 0; row < 2; ++row)
         {
             label(row, tr(kNames[row]), kToggle);
             toggle(c, 1292.0f, row_centre(row),
                    tween::clamp01(switches_[static_cast<std::size_t>(row)].value));
         }
-        // What the highlighted switch does.
-        text_block(c, tr(kAbout[std::clamp(option_, 0, 1)]), 592.0f,
-                   baseline(716.0f, 30.0f, theme::kSmall), theme::kSmall, 30.0f, theme::kMeta, 736.0f,
+        // The testing switches: how many are on, opened with Cross.
+        const int active = testing_active();
+        const float shown = text_shrink(
+            c, active == 0 ? std::string{tr("None")} : fill(tr("{0} on"), {std::to_string(active)}), 1292.0f,
+            baseline(dialog_row_top(modal, 2), 94.0f, theme::kSmall), theme::kSmall,
+            active == 0 ? theme::kMeta : theme::kLimePale, 320.0f, Align::right);
+        label(2, tr("Testing switches"), shown);
+        // What the highlighted row does.
+        text_block(c, tr(kAbout[std::clamp(option_, 0, 2)]), 592.0f,
+                   baseline(746.0f, 30.0f, theme::kSmall), theme::kSmall, 30.0f, theme::kMeta, 736.0f,
                    2, kShrink);
         break;
     }
@@ -897,15 +916,15 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
                    theme::kMeta, 736.0f, 2, kShrink);
     }
 
-    // Under the rows: Video's five, and Performance's four with their line of text, end lower
-    // than the other dialogs' three.
-    const float foot = scrolls ? 848.0f : 811.0f;
+    // Under the rows: Video's five, Performance's four with their line of text and Diagnostics'
+    // three with theirs end lower than the other dialogs' three.
+    const float foot = scrolls || modal == Modal::diagnostics ? 848.0f : 811.0f;
     if (!message_.empty())
     {
         notice(c, message_, 592.0f, foot + 7.0f, theme::kSmall,
                message_warning_ ? theme::kWarning : theme::kLimePale, 736.0f, message_warning_);
     }
-    else if (modal == Modal::controls && option_ == 1)
+    else if ((modal == Modal::controls && option_ == 1) || (modal == Modal::diagnostics && option_ == 2))
     {
         static constexpr Hint kOpen[] = {
             {Pad::updown, TR("Select")}, {Pad::cross, TR("Open")}, {Pad::circle, TR("Back")}};

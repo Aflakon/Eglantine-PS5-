@@ -1,0 +1,33 @@
+diff --git a/src/video_core/texture_cache/texture_cache.h b/src/video_core/texture_cache/texture_cache.h
+index dcfd270df3..a4d6165390 100644
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -2009,6 +2009,28 @@ std::vector<u32> TextureCache<P>::BindSparseLayers(Image& image, std::span<const
+ template <class P>
+ void TextureCache<P>::UploadLayers(Image& image, std::span<const u32> layers) {
+     if constexpr (requires { &Runtime::AccelerateImageUploadLayers; }) {
++        // One staging buffer for every layer took 352 MiB for four of title 1's terrain layers
++        // (85 MiB each) and was refused with the shared pool full, mid-race. Past 128 MiB the
++        // layers go in groups; the GPU finishes each group before the next, so the next one gets
++        // the same staging buffer back instead of another one.
++        constexpr size_t MaxStagingBytes = 128_MiB;
++        ImageInfo one_layer = image.info;
++        one_layer.resources.layers = 1;
++        const size_t layer_bytes =
++            False(image.flags & ImageFlagBits::AcceleratedUpload)
++                ? CalculateUnswizzledSizeBytes(one_layer)
++                : image.info.layer_stride -
++                      FullUploadSwizzles(image.info)[image.host_level_offset].buffer_offset;
++        const size_t per_group = (std::max<size_t>)(1, MaxStagingBytes / (std::max<size_t>)(layer_bytes, 1));
++        if (layers.size() > per_group) {
++            for (size_t first = 0; first < layers.size(); first += per_group) {
++                if (first != 0) {
++                    runtime.Finish();
++                }
++                UploadLayers(image, layers.subspan(first, (std::min)(per_group, layers.size() - first)));
++            }
++            return;
++        }
+         if (False(image.flags & ImageFlagBits::AcceleratedUpload)) {
+             // Plain formats: each layer unswizzled on its own into its layer of the image.
+             ImageInfo layer_info = image.info;

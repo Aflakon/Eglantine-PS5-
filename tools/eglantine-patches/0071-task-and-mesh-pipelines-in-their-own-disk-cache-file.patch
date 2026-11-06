@@ -1,0 +1,225 @@
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index 0ce7706e9c..94a369102a 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -768,6 +768,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+         return;
+     }
+     pipeline_cache_filename = base_dir / "vulkan.bin";
++    mesh_pipeline_cache_filename = base_dir / "vulkan_mesh.bin";
+     used_pipelines_filename = base_dir / "vulkan_used.bin";
+     used_pipelines = LoadUsedPipelines(used_pipelines_filename, MaxUsedPipelineAge(device));
+     used_pipelines_saved = std::chrono::steady_clock::now();
+@@ -809,13 +810,14 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+         });
+         ++state.total;
+     }};
++    bool loading_mesh_file = false;
+     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
+         GraphicsPipelineCacheKey key;
+         file.read(reinterpret_cast<char*>(&key), sizeof(key));
+ 
+-        // Task/mesh pipelines are not stored (their mesh registers are not in the format); skip
+-        // any that were.
+-        if (std::ranges::any_of(envs, [](const FileEnvironment& env) {
++        // Task/mesh pipelines live in their own file, with their mesh registers; vulkan.bin
++        // doesn't carry those, so skip any it holds.
++        if (!loading_mesh_file && std::ranges::any_of(envs, [](const FileEnvironment& env) {
+                 return env.ShaderStage() == Shader::Stage::Task ||
+                        env.ShaderStage() == Shader::Stage::Mesh;
+             })) {
+@@ -882,6 +884,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
+     }};
+     VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, CACHE_VERSION, load_compute,
+                                load_graphics);
++    if (device.IsExtMeshShaderSupported()) {
++        loading_mesh_file = true;
++        VideoCommon::LoadPipelines(stop_loading, mesh_pipeline_cache_filename, CACHE_VERSION,
++                                   load_compute, load_graphics, true);
++    }
+ 
+     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
+     if (skipped_pipelines != 0) {
+@@ -1319,19 +1326,17 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
+     if (!pipeline || pipeline_cache_filename.empty()) {
+         return pipeline;
+     }
+-    if (pipeline->IsMeshPipeline()) {
+-        // Not stored: task and mesh programs are translated with the mesh registers, which the
+-        // cache format does not carry. The few of them rebuild quickly from the driver cache.
+-        QueueVulkanPipelineCacheFlush();
+-        return pipeline;
+-    }
++    // Task and mesh programs are translated with the mesh registers, which vulkan.bin doesn't
++    // carry: they go to their own file (builds without it never read those records).
++    const bool is_mesh = pipeline->IsMeshPipeline();
+     if (disk_pipelines.contains(graphics_key.Hash())) {
+         // In the disk cache already, only not built at boot.
+         QueueVulkanPipelineCacheFlush();
+         return pipeline;
+     }
+     disk_pipelines.insert(graphics_key.Hash());
+-    serialization_thread.QueueWork([this, key = graphics_key, envs = std::move(environments.envs)] {
++    serialization_thread.QueueWork([this, key = graphics_key, envs = std::move(environments.envs),
++                                    is_mesh] {
+         boost::container::static_vector<const GenericEnvironment*, Maxwell::MaxShaderProgram>
+             env_ptrs;
+         for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+@@ -1339,7 +1344,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
+                 env_ptrs.push_back(&envs[index]);
+             }
+         }
+-        SerializePipeline(key, env_ptrs, pipeline_cache_filename, CACHE_VERSION);
++        SerializePipeline(key, env_ptrs,
++                          is_mesh ? mesh_pipeline_cache_filename : pipeline_cache_filename,
++                          CACHE_VERSION, is_mesh);
+     });
+     QueueVulkanPipelineCacheFlush();
+     return pipeline;
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.h b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
+index 3c0719683d..c7e562163b 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.h
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
+@@ -184,6 +184,8 @@ private:
+     Shader::HostTranslateInfo host_info;
+ 
+     std::filesystem::path pipeline_cache_filename;
++    /// Task and mesh pipelines, with the mesh state they are translated with.
++    std::filesystem::path mesh_pipeline_cache_filename;
+ 
+     /// Key hashes of the graphics pipelines in the disk cache. Only those a recent session used
+     /// (used_pipelines) are built at boot; the rest are built when first needed, and not stored
+diff --git a/src/video_core/shader_environment.cpp b/src/video_core/shader_environment.cpp
+index bf1cef1928..57d151af58 100644
+--- a/src/video_core/shader_environment.cpp
++++ b/src/video_core/shader_environment.cpp
+@@ -246,7 +246,7 @@ void GenericEnvironment::Dump(u64 pipeline_hash, u64 shader_hash) {
+     DumpImpl(pipeline_hash, shader_hash, code, read_highest, read_lowest, initial_offset, stage);
+ }
+ 
+-void GenericEnvironment::Serialize(std::ofstream& file) const {
++void GenericEnvironment::Serialize(std::ofstream& file, bool with_mesh_state) const {
+     const u64 code_size{static_cast<u64>(CachedSizeBytes())};
+     const u64 num_texture_types{static_cast<u64>(texture_types.size())};
+     const u64 num_texture_pixel_formats{static_cast<u64>(texture_pixel_formats.size())};
+@@ -301,6 +301,11 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
+             file.write(reinterpret_cast<const char*>(&gp_passthrough_mask),
+                        sizeof(gp_passthrough_mask));
+         }
++        if (with_mesh_state && (stage == Shader::Stage::Task || stage == Shader::Stage::Mesh)) {
++            file.write(reinterpret_cast<const char*>(&mesh_registers), sizeof(mesh_registers))
++                .write(reinterpret_cast<const char*>(&mesh_primitive_header),
++                       sizeof(mesh_primitive_header));
++        }
+     }
+ }
+ 
+@@ -794,7 +799,7 @@ u32 ComputeEnvironment::ReadViewportTransformState() {
+     return viewport_transform_state;
+ }
+ 
+-void FileEnvironment::Deserialize(std::ifstream& file) {
++void FileEnvironment::Deserialize(std::ifstream& file, bool with_mesh_state) {
+     u64 code_size{};
+     u64 num_texture_types{};
+     u64 num_texture_pixel_formats{};
+@@ -864,6 +869,11 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
+         if (stage == Shader::Stage::Geometry) {
+             file.read(reinterpret_cast<char*>(&gp_passthrough_mask), sizeof(gp_passthrough_mask));
+         }
++        if (with_mesh_state && (stage == Shader::Stage::Task || stage == Shader::Stage::Mesh)) {
++            file.read(reinterpret_cast<char*>(&mesh_registers), sizeof(mesh_registers))
++                .read(reinterpret_cast<char*>(&mesh_primitive_header),
++                      sizeof(mesh_primitive_header));
++        }
+     }
+     // Native programs fold bank 1 reads as they did when they were built.
+     is_proprietary_driver = texture_bound == 2 || Shader::Ampere::HasNativeAddressMap(code);
+@@ -959,7 +969,8 @@ std::optional<Shader::ReplaceConstant> FileEnvironment::GetReplaceConstBuffer(u3
+ }
+ 
+ void SerializePipeline(std::span<const char> key, std::span<const GenericEnvironment* const> envs,
+-                       const std::filesystem::path& filename, u32 cache_version) try {
++                       const std::filesystem::path& filename, u32 cache_version,
++                       bool with_mesh_state) try {
+     std::ofstream file(filename, std::ios::binary | std::ios::ate | std::ios::app);
+     file.exceptions(std::ifstream::failbit);
+     if (!file.is_open()) {
+@@ -978,7 +989,7 @@ void SerializePipeline(std::span<const char> key, std::span<const GenericEnviron
+     const u32 num_envs{static_cast<u32>(envs.size())};
+     file.write(reinterpret_cast<const char*>(&num_envs), sizeof(num_envs));
+     for (const GenericEnvironment* const env : envs) {
+-        env->Serialize(file);
++        env->Serialize(file, with_mesh_state);
+     }
+     file.write(key.data(), key.size_bytes());
+ 
+@@ -993,7 +1004,8 @@ void SerializePipeline(std::span<const char> key, std::span<const GenericEnviron
+ void LoadPipelines(
+     std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
+     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
+-    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics) try {
++    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics,
++    bool with_mesh_state) try {
+     std::ifstream file(filename, std::ios::binary | std::ios::ate);
+     if (!file.is_open()) {
+         return;
+@@ -1030,7 +1042,7 @@ void LoadPipelines(
+         file.read(reinterpret_cast<char*>(&num_envs), sizeof(num_envs));
+         std::vector<FileEnvironment> envs(num_envs);
+         for (FileEnvironment& env : envs) {
+-            env.Deserialize(file);
++            env.Deserialize(file, with_mesh_state);
+         }
+         if (envs.front().ShaderStage() == Shader::Stage::Compute) {
+             load_compute(file, std::move(envs.front()));
+diff --git a/src/video_core/shader_environment.h b/src/video_core/shader_environment.h
+index 916c3a2fc3..2d37f2fb52 100644
+--- a/src/video_core/shader_environment.h
++++ b/src/video_core/shader_environment.h
+@@ -91,7 +91,9 @@ public:
+ 
+     void Dump(u64 pipeline_hash, u64 shader_hash) override;
+ 
+-    void Serialize(std::ofstream& file) const;
++    /// with_mesh_state: also the mesh registers and pass-through header of task and mesh
++    /// programs (only the mesh pipeline file carries them).
++    void Serialize(std::ofstream& file, bool with_mesh_state = false) const;
+ 
+     bool HasHLEMacroState() const override {
+         return has_hle_engine_state;
+@@ -209,7 +211,7 @@ public:
+     FileEnvironment& operator=(const FileEnvironment&) = delete;
+     FileEnvironment(const FileEnvironment&) = delete;
+ 
+-    void Deserialize(std::ifstream& file);
++    void Deserialize(std::ifstream& file, bool with_mesh_state = false);
+ 
+     [[nodiscard]] u64 ReadInstruction(u32 address) override;
+ 
+@@ -264,17 +266,21 @@ private:
+ };
+ 
+ void SerializePipeline(std::span<const char> key, std::span<const GenericEnvironment* const> envs,
+-                       const std::filesystem::path& filename, u32 cache_version);
++                       const std::filesystem::path& filename, u32 cache_version,
++                       bool with_mesh_state = false);
+ 
+ template <typename Key, typename Envs>
+     requires std::is_trivially_copyable_v<Key>
+         && std::has_unique_object_representations_v<Key>
+-void SerializePipeline(const Key& key, const Envs& envs, const std::filesystem::path& filename, u32 cache_version) {
+-    SerializePipeline(std::span(reinterpret_cast<const char*>(&key), sizeof(key)), std::span(envs.data(), envs.size()), filename, cache_version);
++void SerializePipeline(const Key& key, const Envs& envs, const std::filesystem::path& filename, u32 cache_version,
++                       bool with_mesh_state = false) {
++    SerializePipeline(std::span(reinterpret_cast<const char*>(&key), sizeof(key)), std::span(envs.data(), envs.size()), filename, cache_version,
++                      with_mesh_state);
+ }
+ 
+ void LoadPipelines(std::stop_token stop_loading, const std::filesystem::path& filename, u32 expected_cache_version,
+     Common::UniqueFunction<void, std::ifstream&, FileEnvironment> load_compute,
+-    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics);
++    Common::UniqueFunction<void, std::ifstream&, std::vector<FileEnvironment>> load_graphics,
++    bool with_mesh_state = false);
+ 
+ } // namespace VideoCommon

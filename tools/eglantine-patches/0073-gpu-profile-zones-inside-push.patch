@@ -1,0 +1,124 @@
+diff --git a/src/video_core/control/scheduler.cpp b/src/video_core/control/scheduler.cpp
+index 97d2dcd482..016ab5adf9 100644
+--- a/src/video_core/control/scheduler.cpp
++++ b/src/video_core/control/scheduler.cpp
+@@ -14,10 +14,12 @@
+ #include "video_core/control/scheduler.h"
+ #include "video_core/gpu.h"
+ #include "video_core/gpu_split.h"
++#include "video_core/nx2_profile.h"
+ 
+ namespace Tegra::Control {
+ 
+ void Scheduler::BindChannel(GPU& gpu, s32 bind_id) {
++    VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::BindChannel};
+     // With the GPU thread split the rasterizer's channel switches with the methods around it, on
+     // the back thread (deferred outside the lock: the back takes it to bind).
+     if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+@@ -51,6 +53,7 @@ void Scheduler::Push(GPU& gpu, s32 channel, CommandList&& entries) {
+         any_pending.store(true, std::memory_order_release);
+     }
+     if (!pending_channels.empty()) {
++        VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::ResumePending};
+         ResumePending(gpu);
+     }
+ }
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index a7109a8aea..e7c91f58c1 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -84,6 +84,7 @@ void DmaPusher::DispatchCalls() {
+         split.Publish();
+         return;
+     }
++    VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::ListEnd};
+     system.GPU().FlushCommands();
+     system.GPU().OnCommandListEnd();
+ }
+@@ -92,6 +93,8 @@ bool DmaPusher::Step() {
+     if (!ib_enable || dma_pushbuffer.empty()) {
+         return false;
+     }
++    // Reading and parsing the lists; the methods they call open zones of their own.
++    VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::CommandLists};
+     const u64 suspensions_before = suspensions.load(std::memory_order_relaxed);
+     if (!puller.ResumeAcquire(*this)) {
+         return false;
+@@ -469,6 +472,7 @@ void DmaPusher::CallMethod(u32 argument) {
+     }
+     auto& split = VideoCommon::GpuSplit::Get();
+     if (dma_state.method < non_puller_methods) {
++        VideoCommon::Nx2Profile::Scope puller_scope{VideoCommon::Nx2Profile::Zone::Puller};
+         puller.CallPullerMethod(*this, Engines::Puller::MethodCall{
+             dma_state.method,
+             argument,
+@@ -532,6 +536,7 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
+     }
+     auto& split = VideoCommon::GpuSplit::Get();
+     if (dma_state.method < non_puller_methods) {
++        VideoCommon::Nx2Profile::Scope puller_scope{VideoCommon::Nx2Profile::Zone::Puller};
+         puller.CallMultiMethod(*this, dma_state.method, dma_state.subchannel, base_start, num_methods, dma_state.method_count);
+     } else {
+         auto subchannel = subchannels[dma_state.subchannel];
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index d17775761c..46e0cb6989 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -8,6 +8,7 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstdlib>
++#include <cstring>
+ #include <string>
+ #include <unordered_set>
+ 
+@@ -53,6 +54,10 @@ enum class Zone : u32 {
+     Method,       ///< Engine method calls (what a split GPU thread's back half would run)
+     SplitDrain,   ///< Split GPU thread: the front waits for the back (gpu_split.h)
+     SplitWait,    ///< Split GPU thread: the back waits for work
++    CommandLists, ///< DmaPusher::Step outside methods: reading and parsing command lists
++    Puller,       ///< Puller methods (semaphores, syncpoints, channel commands)
++    BindChannel,  ///< Scheduler::BindChannel (takes the scheduling lock)
++    ListEnd,      ///< DispatchCalls' FlushCommands and OnCommandListEnd
+     Count,
+ };
+ 
+@@ -63,7 +68,8 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "sync descriptors", "read handles", "fill image views", "texture buffers", "update buffers",
+     "descriptor acquire", "bind stage buffers", "push descriptors", "render targets",
+     "configure draw", "dynamic state", "draw record", "texture upload", "fence",
+-    "fence skipped", "method", "split drain", "split wait",
++    "fence skipped", "method", "split drain", "split wait", "command lists", "puller",
++    "bind channel", "list end",
+ };
+ 
+ // Read at startup and again when the GPU thread starts (ReadSwitch): a frontend may set the
+@@ -181,10 +187,24 @@ inline void Report(const char* thread_name = "GPU thread") {
+     auto& data = t_data;
+     const u64 now = Now();
+     if (t_place == nullptr) {
+-        if (const u32 index = g_place_count.fetch_add(1, std::memory_order_relaxed);
+-            index < g_places.size()) {
+-            t_place = &g_places[index];
+-            t_place->name.store(thread_name, std::memory_order_relaxed);
++        // A thread of the same name gone with an earlier game of this session leaves its place:
++        // take it over, or its last beat reads as a GPU thread stopped for good (a false alarm
++        // in Mario Kart World, the second game of a session).
++        const u32 count = (std::min)(g_place_count.load(std::memory_order_relaxed),
++                                     static_cast<u32>(g_places.size()));
++        for (u32 i = 0; i < count && t_place == nullptr; ++i) {
++            const char* const name = g_places[i].name.load(std::memory_order_relaxed);
++            if (name != nullptr && std::strcmp(name, thread_name) == 0) {
++                t_place = &g_places[i];
++                t_place->zone.store(0, std::memory_order_relaxed);
++            }
++        }
++        if (t_place == nullptr) {
++            if (const u32 index = g_place_count.fetch_add(1, std::memory_order_relaxed);
++                index < g_places.size()) {
++                t_place = &g_places[index];
++                t_place->name.store(thread_name, std::memory_order_relaxed);
++            }
+         }
+     }
+     if (t_place != nullptr) {

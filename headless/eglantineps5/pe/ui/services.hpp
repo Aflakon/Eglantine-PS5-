@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 #include <atomic>
 #include <optional>
@@ -466,6 +467,21 @@ class Services
     virtual const std::vector<std::string> &language_labels() = 0;
     virtual std::string language_region(int language) = 0;
     virtual std::string setup_details() = 0;
+    // Settings > Diagnostics > Testing switches: the emulator's switches the app sets as it starts
+    // (NAME=VALUE, from config/env.txt). None when the file is not there.
+    virtual std::vector<std::pair<std::string, std::string>> test_switches()
+    {
+        return {};
+    }
+    // Sets the switches `names` to `values` (a name without a value is left out) and keeps the
+    // file's other lines; false when it could not be written. They apply from the next start.
+    virtual bool set_test_switches(const std::vector<std::string> &names,
+                                   const std::vector<std::pair<std::string, std::string>> &values)
+    {
+        (void)names;
+        (void)values;
+        return false;
+    }
 
     // ---- game files ----
     // The subfolder names of a folder; false when it cannot be opened.

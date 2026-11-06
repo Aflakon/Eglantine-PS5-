@@ -1,0 +1,125 @@
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index b4713f9d1b..f8bc25b5b4 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -248,8 +248,15 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
+     DAddr device_addr_end_aligned = Common::AlignUp(device_addr + size, Core::DEVICE_PAGESIZE);
+     area->start_address = device_addr_start_aligned;
+     area->end_address = device_addr_end_aligned;
+-    if (memory_tracker.IsRegionPreflushable(device_addr, size)) {
++    // Preflushable data is downloaded at fences, but only where it is marked (QueueGpuWrite): the
++    // rest of the range still needs this flush.
++    if (memory_tracker.IsRegionPreflushable(device_addr, size) &&
++        !HasGpuWritesNotDownloadedAtFence(device_addr_start_aligned,
++                                          device_addr_end_aligned - device_addr_start_aligned)) {
+         area->preemtive = true;
++        // The core keeps this area: a later GPU write to its unmarked pages must arm them again.
++        read_trapped_ranges.Subtract(device_addr_start_aligned,
++                                     device_addr_end_aligned - device_addr_start_aligned);
+         return area;
+     };
+     area->preemtive = !IsRegionGpuModified(device_addr_start_aligned,
+@@ -325,11 +332,7 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
+         const DAddr diff = base_address - *cpu_src_address;
+         const DAddr new_base_address = *cpu_dest_address + diff;
+         tmp_intervals.push_back({new_base_address, size});
+-        if (DownloadsAtFence(new_base_address, size)) {
+-            uncommitted_gpu_modified_ranges.Add(new_base_address, size);
+-        } else {
+-            ArmReadTraps(new_base_address, size);
+-        }
++        QueueGpuWrite(new_base_address, size);
+     };
+     gpu_modified_ranges.ForEachInRange(*cpu_src_address, amount, mirror);
+     // This subtraction in this order is important for overlapping copies.
+@@ -1809,11 +1812,7 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
+     MarkVertexBuffersStale(device_addr, size);
+     Nx2AddRangeOnce(gpu_modified_ranges, nx2_recent_gpu_ranges, nx2_recent_gpu_next, device_addr,
+                     size);
+-    if (DownloadsAtFence(device_addr, size)) {
+-        uncommitted_gpu_modified_ranges.Add(device_addr, size);
+-    } else {
+-        ArmReadTraps(device_addr, size);
+-    }
++    QueueGpuWrite(device_addr, size);
+     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
+         Tegra::Nx2MarkGpuWritten(device_addr, size);
+         Nx2NoteListWrite(buffer_id, device_addr, size);
+diff --git a/src/video_core/buffer_cache/buffer_cache_base.h b/src/video_core/buffer_cache/buffer_cache_base.h
+index dfa7deec8d..3696b65925 100644
+--- a/src/video_core/buffer_cache/buffer_cache_base.h
++++ b/src/video_core/buffer_cache/buffer_cache_base.h
+@@ -651,6 +651,54 @@ private:
+         return AsyncBufferDownloads() || memory_tracker.IsRegionPreflushable(device_addr, size);
+     }
+ 
++    /// Whether the range holds GPU-written data that no fence downloads (not Preflushable).
++    bool HasGpuWritesNotDownloadedAtFence(DAddr device_addr, u64 size) {
++        if (AsyncBufferDownloads()) {
++            return false;
++        }
++        bool found = false;
++        memory_tracker.ForEachDownloadRange(device_addr, size, false, [&](u64 start, u64 range_size) {
++            if (found) {
++                return;
++            }
++            u64 covered = 0;
++            memory_tracker.ForEachPreflushableRange(start, range_size, [&](u64 lower, u64 length) {
++                const u64 begin = (std::max)(lower, start);
++                const u64 end = (std::min)(lower + length, start + range_size);
++                covered += end > begin ? end - begin : 0;
++            });
++            found = covered < range_size;
++        });
++        return found;
++    }
++
++    /// A GPU write: queues its Preflushable parts for download at the next fence and traps reads
++    /// of the rest. Queuing the whole range when any page of it was Preflushable copied whole
++    /// written storage buffers (up to 8 MiB) back at every fence: ~5 GB/s in title 1's forest.
++    void QueueGpuWrite(DAddr device_addr, u64 size) {
++        if (AsyncBufferDownloads()) {
++            uncommitted_gpu_modified_ranges.Add(device_addr, size);
++            return;
++        }
++        const DAddr end = device_addr + size;
++        DAddr cursor = device_addr;
++        memory_tracker.ForEachPreflushableRange(device_addr, size, [&](DAddr start, u64 range_size) {
++            const DAddr lower = (std::max)(start, cursor);
++            const DAddr upper = (std::min)(start + range_size, end);
++            if (lower >= upper) {
++                return;
++            }
++            if (lower > cursor) {
++                ArmReadTraps(cursor, lower - cursor);
++            }
++            uncommitted_gpu_modified_ranges.Add(lower, upper - lower);
++            cursor = upper;
++        });
++        if (cursor < end) {
++            ArmReadTraps(cursor, end - cursor);
++        }
++    }
++
+     /// GPU writes that are not downloaded at fences: trap the guest CPU's next read of their
+     /// pages, which flushes them once and marks them Preflushable (then DownloadsAtFence).
+     void ArmReadTraps(DAddr device_addr, u64 size) {
+diff --git a/src/video_core/buffer_cache/memory_tracker_base.h b/src/video_core/buffer_cache/memory_tracker_base.h
+index cf90e658e4..89155ad954 100644
+--- a/src/video_core/buffer_cache/memory_tracker_base.h
++++ b/src/video_core/buffer_cache/memory_tracker_base.h
+@@ -174,6 +174,14 @@ public:
+         });
+     }
+ 
++    /// Call 'func' for each range marked Preflushable
++    template <typename Func>
++    void ForEachPreflushableRange(VAddr query_cpu_range, u64 query_size, Func&& func) {
++        IteratePages<false>(query_cpu_range, query_size, [&func](Manager* manager, u64 offset, size_t size) {
++            manager->ForEachModifiedRange(Type::Preflushable, false, manager->cpu_addr + offset, size, func);
++        });
++    }
++
+     template <typename Func>
+     void ForEachDownloadRangeAndClear(VAddr query_cpu_range, u64 query_size, Func&& func) {
+         IteratePages<false>(query_cpu_range, query_size, [&func](Manager* manager, u64 offset, size_t size) {

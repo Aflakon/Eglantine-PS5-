@@ -1,0 +1,125 @@
+diff --git a/src/core/core.cpp b/src/core/core.cpp
+index 927d225d62..3b5aa6e3fc 100644
+--- a/src/core/core.cpp
++++ b/src/core/core.cpp
+@@ -72,6 +72,7 @@
+ #include "hid_core/hid_core.h"
+ #include "network/network.h"
+ #include "video_core/host1x/host1x.h"
++#include "video_core/nx2_profile.h"
+ #include "video_core/renderer_base.h"
+ #include "video_core/video_core.h"
+ 
+@@ -292,6 +293,11 @@ struct System::Impl {
+                     }
+                     auto processes = kernel.GetProcessList();
+                     LOG_WARNING(Core, "guest threads t={}s processes={}", tick * 15, processes.size());
++                    // With EDEN_NX2_GPU_PROFILE: a GPU thread that has stopped, and where.
++                    if (const std::string stopped = VideoCommon::Nx2Profile::StoppedPlaces();
++                        !stopped.empty()) {
++                        LOG_WARNING(Core, "GPU threads not going round their loop{}", stopped);
++                    }
+                     for (auto& process : processes) {
+                         Kernel::KScopedLightLock ll{process->GetListLock()};
+                         for (auto& thread : process->GetThreadList()) {
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index 3492689481..d17775761c 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -3,6 +3,7 @@
+ 
+ #pragma once
+ 
++#include <algorithm>
+ #include <array>
+ #include <atomic>
+ #include <chrono>
+@@ -94,12 +95,27 @@ struct ThreadData {
+ 
+ inline thread_local ThreadData t_data;
+ 
++// Where each GPU thread is, for the guest thread watchdog (core.cpp): the innermost zone it is in
++// and when it last went round its loop (Report). Kept while the profile is on, so a GPU thread
++// that stops (Mario Kart World froze while loading) shows the zone it stopped in.
++struct ThreadPlace {
++    std::atomic<u32> zone{0}; ///< Zone + 1 of the innermost open zone; 0: none
++    std::atomic<u64> beat{0}; ///< Now() at its last Report
++    std::atomic<const char*> name{nullptr};
++};
++inline std::array<ThreadPlace, 4> g_places{};
++inline std::atomic<u32> g_place_count{0};
++inline thread_local ThreadPlace* t_place = nullptr;
++
+ class Scope {
+ public:
+     explicit Scope(Zone zone_) : zone{zone_}, enabled{Enabled()} {
+         if (!enabled) {
+             return;
+         }
++        if (t_place != nullptr) {
++            parent_zone = t_place->zone.exchange(static_cast<u32>(zone) + 1, std::memory_order_relaxed);
++        }
+         parent_child_ns = t_data.child_ns;
+         t_data.child_ns = 0;
+         start = Now();
+@@ -115,6 +131,9 @@ public:
+         data.exclusive_ns[index] += elapsed - data.child_ns;
+         ++data.count[index];
+         data.child_ns = parent_child_ns + elapsed;
++        if (t_place != nullptr) {
++            t_place->zone.store(parent_zone, std::memory_order_relaxed);
++        }
+     }
+ 
+     Scope(const Scope&) = delete;
+@@ -123,6 +142,7 @@ public:
+ private:
+     Zone zone;
+     bool enabled;
++    u32 parent_zone{};
+     u64 start{};
+     u64 parent_child_ns{};
+ };
+@@ -160,6 +180,16 @@ inline void Report(const char* thread_name = "GPU thread") {
+     }
+     auto& data = t_data;
+     const u64 now = Now();
++    if (t_place == nullptr) {
++        if (const u32 index = g_place_count.fetch_add(1, std::memory_order_relaxed);
++            index < g_places.size()) {
++            t_place = &g_places[index];
++            t_place->name.store(thread_name, std::memory_order_relaxed);
++        }
++    }
++    if (t_place != nullptr) {
++        t_place->beat.store(now, std::memory_order_relaxed);
++    }
+     if (data.window_start == 0) {
+         data.window_start = now;
+         data.child_ns = 0;
+@@ -202,4 +232,25 @@ inline void Report(const char* thread_name = "GPU thread") {
+     data.window_start = now;
+ }
+ 
++/// For the watchdog: each GPU thread that has not gone round its loop for 5 s or more, and the
++/// zone it is in ("idle" or "split wait": waiting for work). Empty while the profile is off.
++inline std::string StoppedPlaces() {
++    std::string text;
++    const u64 now = Now();
++    const u32 count = (std::min)(g_place_count.load(std::memory_order_relaxed),
++                                 static_cast<u32>(g_places.size()));
++    for (u32 i = 0; i < count; ++i) {
++        const ThreadPlace& place = g_places[i];
++        const u64 beat = place.beat.load(std::memory_order_relaxed);
++        const char* const name = place.name.load(std::memory_order_relaxed);
++        if (beat == 0 || name == nullptr || now < beat + 5'000'000'000ULL) {
++            continue;
++        }
++        const u32 zone = place.zone.load(std::memory_order_relaxed);
++        text += fmt::format(" | {}: {} s, in zone \"{}\"", name, (now - beat) / 1'000'000'000ULL,
++                            zone == 0 || zone > zone_names.size() ? "none" : zone_names[zone - 1]);
++    }
++    return text;
++}
++
+ } // namespace VideoCommon::Nx2Profile
