@@ -907,36 +907,49 @@ std::size_t CommittedSplit() noexcept {
 namespace {
 constexpr std::size_t CodeStep = std::size_t{16} << 20;
 constexpr std::size_t CodeSteps = 64; // the largest cache: 1 GiB
+constexpr std::size_t CodePieces = CodeStep / LargePage; // a step's memory, in 2 MiB blocks
 struct CodeRange {
     std::atomic<std::uintptr_t> executable{0}; // 0: free
     std::uintptr_t writable = 0;
     std::size_t span = 0;
     std::atomic<std::size_t> committed{0};
-    std::int64_t physical[CodeSteps] = {};
+    std::size_t pieces = 0; // 2 MiB blocks mapped (a step stopped half way keeps those it has)
+    std::int64_t physical[CodeSteps * CodePieces] = {}; // per 2 MiB block
 };
 std::array<CodeRange, 16> code_ranges;
 std::mutex code_mutex;
 std::atomic<std::size_t> code_reserved{0}, code_committed{0};
 
-// Memory behind the next step of both ranges. code_mutex is held.
+// Memory behind the next step of both ranges, a 2 MiB block at a time: one block of 16 MiB
+// asked of a pool cut into small free ranges was refused with 2 MiB blocks still free and the
+// guest's reserve holding 512 MiB, and Mario Kart World stopped there. A block the pool has none
+// for comes from that reserve, as a heap piece does (TakeHostReserveBlock leaves half of it for
+// the guest's writes and gives way to writes that wait). code_mutex is held.
 bool CommitCodeStep(CodeRange& range, std::size_t offset) {
     void* const writable = reinterpret_cast<void*>(range.writable + offset);
     void* const executable = reinterpret_cast<void*>(range.executable.load(std::memory_order_relaxed) + offset);
 #ifdef PS5_NATIVE
-    std::int64_t physical = -1;
-    if (eden_direct_low(CodeStep, LargePage, 12, &physical) != 0) return false;
-    // A step that fails half way stays as it is: the caller has no cache to go on with.
-    void* at = writable;
-    if (sceKernelMapDirectMemory(&at, CodeStep, PROT_READ | PROT_WRITE, MAP_FIXED, physical, LargePage) != 0 ||
-        at != writable)
-        return false;
-    std::memset(writable, 0, CodeStep);
-    at = executable;
-    if (sceKernelMapDirectMemory(&at, CodeStep, PROT_READ, MAP_FIXED, physical, LargePage) != 0 || at != executable)
-        return false;
-    // As MapExecutableAlias: the mapping call refuses EXEC on some versions.
-    if (mprotect(executable, CodeStep, PROT_READ | PROT_EXEC) != 0) return false;
-    range.physical[offset / CodeStep] = physical;
+    // A step that stopped half way goes on from the blocks it has (the JIT asks again).
+    for (std::size_t piece = range.pieces - offset / LargePage; piece < CodePieces; ++piece) {
+        std::int64_t physical = -1;
+        if (eden_direct_low(LargePage, LargePage, 12, &physical) != 0 && !TakeHostReserveBlock(&physical))
+            return false;
+        void* const piece_writable = static_cast<char*>(writable) + piece * LargePage;
+        void* const piece_executable = static_cast<char*>(executable) + piece * LargePage;
+        void* at = piece_writable;
+        if (sceKernelMapDirectMemory(&at, LargePage, PROT_READ | PROT_WRITE, MAP_FIXED, physical, LargePage) != 0 ||
+            at != piece_writable)
+            return false;
+        std::memset(piece_writable, 0, LargePage);
+        at = piece_executable;
+        if (sceKernelMapDirectMemory(&at, LargePage, PROT_READ, MAP_FIXED, physical, LargePage) != 0 ||
+            at != piece_executable)
+            return false;
+        // As MapExecutableAlias: the mapping call refuses EXEC on some versions.
+        if (mprotect(piece_executable, LargePage, PROT_READ | PROT_EXEC) != 0) return false;
+        range.physical[offset / LargePage + piece] = physical;
+        range.pieces = offset / LargePage + piece + 1;
+    }
 #else
     if (mprotect(writable, CodeStep, PROT_READ | PROT_WRITE) != 0 ||
         mprotect(executable, CodeStep, PROT_READ | PROT_EXEC) != 0)
@@ -992,6 +1005,7 @@ void* ReserveCodeRange(std::size_t size, void** executable) noexcept {
     free_range->writable = reinterpret_cast<std::uintptr_t>(views[0]);
     free_range->span = size;
     free_range->committed.store(0, std::memory_order_relaxed);
+    free_range->pieces = 0;
     free_range->executable.store(reinterpret_cast<std::uintptr_t>(views[1]), std::memory_order_release);
     code_reserved.fetch_add(size, std::memory_order_relaxed);
     *executable = views[1];
@@ -1034,8 +1048,9 @@ bool FreeCodeRange(void* executable) noexcept {
         if (munmap(reinterpret_cast<void*>(range.writable), range.span) != 0 || munmap(executable, range.span) != 0)
             std::abort();
 #ifdef PS5_NATIVE
-        for (std::size_t step = 0; step < committed / CodeStep; ++step)
-            if (sceKernelReleaseDirectMemory(range.physical[step], CodeStep) != 0) std::abort();
+        for (std::size_t piece = 0; piece < range.pieces; ++piece)
+            if (sceKernelReleaseDirectMemory(range.physical[piece], LargePage) != 0) std::abort();
+        range.pieces = 0;
 #endif
         code_reserved.fetch_sub(range.span, std::memory_order_relaxed);
         code_committed.fetch_sub(committed, std::memory_order_relaxed);

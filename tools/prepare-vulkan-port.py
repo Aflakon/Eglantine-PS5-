@@ -473,6 +473,13 @@ ALLOCATOR_REFUSED = """    VkResult created = CALL;
                          static_cast<unsigned long long>(guest_held >> 20),
                          static_cast<unsigned long long>(eden_heap_committed() >> 20));
             ::Eden::Performance::ReportHeap("a buffer was refused");
+            // Last resort: part of the guest's reserve goes back to the pool (half of it stays for the
+            // game's writes) and the allocation is asked for once more.
+            if (const std::size_t lent = eden_guest_memory_lend(std::size_t{128} << 20); lent != 0) {
+                created = AGAIN;
+                std::fprintf(stderr, "EDEN_GRAPHICS_MEMORY %zu MiB of the guest's reserve lent; asked again: result %d\\n",
+                             lent >> 20, int(created));
+            }
         }
     }
     vk::Check(created);
@@ -538,7 +545,8 @@ MemoryAllocator::MemoryAllocator(const Device &device_)'''),
      ('    DestroySparsePools();\n' if 'DestroySparsePools' in (source / 'src/video_core/vulkan_common/vulkan_memory_allocator.h').read_text() else '') +
      '}'),
     ('#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n',
-     '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include <cstdlib>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'),
+     '#include "video_core/vulkan_common/vulkan_memory_allocator.h"\n#include <atomic>\n#include <cstddef>\n#include <cstdio>\n#include <cstring>\n#include <cstdlib>\n#include "performance.h"\nnamespace Common { void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept; }\nextern "C" std::size_t eden_heap_committed(void);\n'
+     'extern "C" std::size_t eden_guest_memory_lend(std::size_t bytes) noexcept;\n'),
     # What an image was that the allocator could not make at all, for stderr.log.
     ('    if (result != VK_SUCCESS) {\n        LOG_CRITICAL(Render_Vulkan, "Image {}x{}x{} ({} levels, {} layers, format {}) failed: {}",',
      """    if (result != VK_SUCCESS) {
@@ -625,7 +633,8 @@ adapt('src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp', 'vulkan_stagi
     }
 '''),
     ('#include "video_core/vulkan_common/vulkan_wrapper.h"\n',
-     '#include "video_core/vulkan_common/vulkan_wrapper.h"\n#include <atomic>\n#include <cstdio>\n#include "staging_buffers.h"\n'),
+     '#include "video_core/vulkan_common/vulkan_wrapper.h"\n#include <atomic>\n#include <chrono>\n#include <cstdio>\n'
+     '#include "performance.h"\n#include "staging_buffers.h"\n'),
     ('void StagingBufferPool::TickFrame() {',
      'void StagingBufferPool::ReleaseCompleted() {\n'
      '    const auto idle = [this](const StagingBuffer& entry) {\n'
@@ -636,7 +645,18 @@ adapt('src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp', 'vulkan_stagi
      '            ::Eden::StagingBuffers::ReleaseFrom(level, idle);\n'
      '        }\n'
      '    }\n'
-     '}\n\nvoid StagingBufferPool::TickFrame() {'),
+     '}\n\nvoid StagingBufferPool::TickFrame() {\n'
+     '    // While the pool the CPU shares with the GPU is short, kept buffers the GPU is done with go\n'
+     '    // back to it, at most every half second: an upload buffer kept for the next transfer is\n'
+     '    // memory the game\'s writes, the heap or the JIT can need first (Mario Kart World kept 218 MiB).\n'
+     '    if (::Eden::Performance::graphics_memory_short.load(std::memory_order_relaxed)) {\n'
+     '        static std::chrono::steady_clock::time_point last_release{};\n'
+     '        const auto now = std::chrono::steady_clock::now();\n'
+     '        if (now - last_release >= std::chrono::milliseconds{500}) {\n'
+     '            last_release = now;\n'
+     '            ReleaseCompleted();\n'
+     '        }\n'
+     '    }'),
     ('    const auto is_free = [this](const StagingBuffer& entry) {\n'
      '        return !entry.deferred && scheduler.IsFree(entry.tick);\n'
      '    };',
