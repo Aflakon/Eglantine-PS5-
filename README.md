@@ -145,8 +145,16 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0071 | Task and mesh pipelines are kept in their own disk cache file with their mesh state, so they are not built again every session (Duck912, `bc121caf3e`, based on Frizti/Lichii `3a2c8980ad`) |
 | 0072 | Layers of a large layered texture are uploaded in groups of up to 128 MB, each finished before the next reuses its staging buffer: four of Mario Kart World's 85 MB terrain layers asked for 352 MB at once and ran the race out of memory |
 | 0073 | The GPU thread profile splits "push" into command lists, puller methods, channel binds and list ends, and a GPU thread that comes back with a new game takes its old watchdog place (the old one gave a false alarm) |
+| 0074 | ReinterpretImage copies a combined depth-stencil image through its depth aspect only, and to the layout the image is in (cr1ckt, Lichii #89; it lost the device on NVIDIA) |
+| 0075 | The alpha test reference is rounded to 1/255 in the pipeline key, so a fading reference no longer builds a new pipeline every frame (zortos293's port of Eglantine PR #544) |
+| 0076 | The occlusion counter is paused, not reset, at each submission (Kaj, Lichii #121; Ocarina of Time's white flashes) |
+| 0077 | Nested returns are counted before demotes move to the end of a fragment program (Inc0rporate, Lichii #127; black scenes on AMD GPUs) |
+| 0078 | A new render target that a clear overwrites whole is not uploaded from guest memory first (Kaj, Lichii #141) |
+| 0079 | Draws recorded after a graphics pipeline that failed to build are dropped instead of reaching the driver (Felipe Lima, Lichii #142) |
+| 0080 | Dirty memory gatherers are serialized: video decoding also gathers off the GPU thread (Paulo Tumabing, core part of Lichii #138; a VP9 movie crash) |
+| 0081 | No lost wake when worker tasks are cancelled (Zortos, core part of Lichii #290) |
 
-0055-0069 and 0071 come from Eglantine's branch `oot-optimization-fixes` (Djihads80/Eglantine), not yet in `nx2`; its idle spin commit `8dc1e6e9c4` is left out, because the PS5 frontend already spins about 100 µs before a guest core sleeps, and its front flush commit `727a9a4eb4` is 0050. Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
+0074-0081 come from [zortos293/Lichii](https://github.com/zortos293/Lichii) (`nx2`), an Eglantine-based emulator. 0055-0069 and 0071 come from Eglantine's branch `oot-optimization-fixes` (Djihads80/Eglantine), not yet in `nx2`; its idle spin commit `8dc1e6e9c4` is left out, because the PS5 frontend already spins about 100 µs before a guest core sleeps, and its front flush commit `727a9a4eb4` is 0050. Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
 Logs on the console: `/data/eglantineps5/user/log/eden_log.txt` (and `.old.txt`), `/data/eglantineps5/logs/`. Settings: `/data/eglantineps5/config/eglantineps5.json`.
 

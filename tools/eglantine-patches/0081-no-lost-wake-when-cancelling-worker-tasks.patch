@@ -1,0 +1,16 @@
+diff --git a/src/common/thread_worker.h b/src/common/thread_worker.h
+index ec3ca0af49..f0cdf96b8d 100644
+--- a/src/common/thread_worker.h
++++ b/src/common/thread_worker.h
+@@ -81,7 +81,10 @@ public:
+                     ++work_done;
+                 }
+             }
+-            ++workers_stopped;
++            {
++                std::scoped_lock lock{queue_mutex};
++                ++workers_stopped;
++            }
+             wait_condition.notify_all();
+         };
+         threads.reserve(num_workers);
