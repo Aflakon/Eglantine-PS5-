@@ -38,6 +38,7 @@ namespace Common {
 void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept;
 // Address space Eden's sparse tables span and the memory they hold (src/memory_pages.cpp).
 void SparseUsage(std::size_t* reserved, std::size_t* committed) noexcept;
+void CodeRangeUsage(std::size_t* reserved, std::size_t* committed) noexcept;
 } // namespace Common
 
 namespace Eden::Performance {
@@ -343,6 +344,7 @@ extern "C" std::size_t eden_heap_committed(void) __attribute__((weak));
 extern "C" std::size_t eden_heap_large_held(unsigned* blocks) __attribute__((weak));
 extern "C" std::size_t eden_heap_trim(void) __attribute__((weak));
 extern "C" void eden_heap_sites_report(void) __attribute__((weak));
+extern "C" void eden_heap_spaces_report(void) __attribute__((weak));
 extern "C" void eden_heap_usage(std::size_t* held, std::size_t* in_use, std::size_t* returned) __attribute__((weak));
 extern "C" unsigned eden_guest_memory_wanted(void) __attribute__((weak));
 extern "C" void eden_guest_memory_reserve(std::size_t* held, std::size_t* target) __attribute__((weak));
@@ -352,6 +354,18 @@ extern "C" std::int32_t sceKernelAvailableDirectMemorySize(std::int64_t, std::in
                                                            std::size_t*);
 // The allocated region at or after an offset (flag 1: find the next one).
 struct DirectMemoryRegion { std::int64_t start; std::int64_t end; std::int32_t type; };
+// sceKernelVirtualQuery's answer (0x48 bytes): one mapping of the address space and its name.
+struct VirtualQueryInfo {
+    void* start;
+    void* end;
+    std::int64_t offset;
+    std::int32_t protection;
+    std::int32_t memory_type;
+    std::uint32_t is_flexible : 1, is_direct : 1, is_stack : 1, is_pooled : 1, is_committed : 1;
+    char name[32];
+};
+static_assert(sizeof(VirtualQueryInfo) == 0x48);
+extern "C" std::int32_t sceKernelVirtualQuery(const void*, int, VirtualQueryInfo*, std::size_t);
 extern "C" std::int32_t sceKernelDirectMemoryQuery(std::int64_t, int, DirectMemoryRegion*, std::size_t);
 #endif
 
@@ -382,6 +396,67 @@ static void RefreshFreeMemory() {
         ::Common::GuestMemoryUsage(&guest_span, &guest_held);
         std::fprintf(stderr, "EDEN_MEMORY pool largest free block %zu MiB, short=%d; the guest's memory holds %zu MiB\n",
                      largest >> 20, int(view.short_memory), guest_held >> 20);
+        if (known) {
+            // The whole pool by holder: what is allocated (all regions), the guest's memory, the heap's
+            // pieces and large blocks, Eden's tables, the JIT's code; "rest" is everything else (graphics,
+            // the driver's own objects, code and data of the app). Ocarina of Time ran out with ~1.7 GiB
+            // in none of the known parts.
+            std::int64_t taken = 0, offset = 0;
+            unsigned regions = 0;
+            DirectMemoryRegion region{};
+            while (offset < total && regions < 8192 &&
+                   sceKernelDirectMemoryQuery(offset, 1, &region, sizeof(region)) == 0 && region.end > offset) {
+                taken += region.end - region.start;
+                offset = region.end;
+                ++regions;
+            }
+            std::size_t table_span = 0, table_held = 0, code_span = 0, code_held = 0;
+            ::Common::SparseUsage(&table_span, &table_held);
+            ::Common::CodeRangeUsage(&code_span, &code_held);
+            unsigned large_blocks = 0;
+            const std::size_t heap_pieces = eden_heap_committed ? eden_heap_committed() : 0;
+            const std::size_t heap_large = eden_heap_large_held ? eden_heap_large_held(&large_blocks) : 0;
+            const long long known_bytes =
+                static_cast<long long>(guest_held + heap_pieces + heap_large + table_held + code_held);
+            // Every third report: the mappings by name, direct memory and flexible memory apart (a block
+            // mapped twice, as the JIT's two views, counts twice).
+            static unsigned map_reports = 0;
+            if (map_reports++ % 3 == 0) {
+                std::map<std::string, std::pair<unsigned long long, unsigned long long>> by_name;
+                VirtualQueryInfo info{};
+                const char* at = nullptr;
+                for (unsigned count = 0; count < 200000; ++count) {
+                    if (sceKernelVirtualQuery(at, 1, &info, sizeof(info)) != 0 || info.end <= info.start) break;
+                    const auto bytes = static_cast<unsigned long long>(static_cast<const char*>(info.end) -
+                                                                       static_cast<const char*>(info.start));
+                    char name[33]{};
+                    std::memcpy(name, info.name, sizeof(info.name));
+                    auto& entry = by_name[name[0] ? name : "(unnamed)"];
+                    (info.is_direct ? entry.first : entry.second) += bytes;
+                    at = static_cast<const char*>(info.end);
+                }
+                std::vector<std::pair<unsigned long long, std::string>> order;
+                for (const auto& [name, bytes] : by_name)
+                    if (bytes.first + bytes.second >= (std::size_t{8} << 20))
+                        order.emplace_back(bytes.first + bytes.second, name);
+                std::sort(order.rbegin(), order.rend());
+                std::string line = "EDEN_MEMORY_MAPS MiB direct/flexible:";
+                for (std::size_t i = 0; i < order.size() && i < 24; ++i) {
+                    const auto& bytes = by_name[order[i].second];
+                    char item[96];
+                    std::snprintf(item, sizeof(item), " [%s]=%llu/%llu", order[i].second.c_str(), bytes.first >> 20,
+                                  bytes.second >> 20);
+                    line += item;
+                }
+                std::fprintf(stderr, "%s\n", line.c_str());
+            }
+            std::fprintf(stderr,
+                         "EDEN_MEMORY_SPLIT MiB: total=%lld taken=%lld regions=%u guest=%zu heap=%zu large=%zu "
+                         "tables=%zu (of %zu) jit=%zu rest=%lld\n",
+                         static_cast<long long>(total >> 20), static_cast<long long>(taken >> 20), regions,
+                         guest_held >> 20, heap_pieces >> 20, heap_large >> 20, table_held >> 20, table_span >> 20,
+                         code_held >> 20, (static_cast<long long>(taken) - known_bytes) >> 20);
+        }
         ReportHeap("every 20 s");
     }
     // The heap's empty spaces go back to the pool while it is short (every 2 s at most).
@@ -435,6 +510,7 @@ void ReportHeap(const char* why) {
     std::fprintf(stderr, "[EglantinePS5] heap: holds %zu MiB (%zu MiB of pieces, %zu MiB in %u large blocks), "
                          "%zu MiB of it in use; %zu MiB given back so far (%s)\n",
                  held >> 20, (held - large) >> 20, large >> 20, large_blocks, in_use >> 20, returned >> 20, why);
+    if (eden_heap_spaces_report) eden_heap_spaces_report();
     if (eden_heap_sites_report) eden_heap_sites_report();
 }
 

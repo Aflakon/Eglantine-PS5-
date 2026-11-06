@@ -23,7 +23,7 @@
 // 64-bit games only: a 32-bit game's fastmem window aliases the backing, which takes it whole.
 
 namespace {
-enum : std::uint8_t { SlotZero = 0, SlotOwn = 1, SlotShared = 2, SlotFine = 3, SlotLock = 0x80, SlotMask = 0x7f };
+enum : std::uint8_t { SlotZero = 0, SlotOwn = 1, SlotShared = 2, SlotFine = 3, SlotCold = 4, SlotLock = 0x80, SlotMask = 0x7f };
 constexpr std::size_t FinePage = 16384, FinePages = SparseSlot / FinePage;
 // A written slot becomes Fine with at least this many pages of zeroes (512 KiB given back).
 constexpr std::size_t FineMinZeroPages = 32;
@@ -35,6 +35,22 @@ constexpr unsigned FineBackoffMax = 10;
 // instead of 30 (the GPU worker waited for every fence, once a frame) where it held 30 without.
 std::atomic<bool> service_requested{true}, scan_requested{true}, dedup_requested{false}, fine_requested{false};
 std::atomic<SparseRange*> service_range{nullptr}; // the guest range the service runs for
+// Cold memory, measured (EDEN_NX2_CRAM_COLD=1): per slot, bit 7 while its access is taken away and
+// the low bits the scan passes it stayed untouched since. Only Own slots are watched.
+std::atomic<std::uint8_t>* cold_watch = nullptr;
+std::uint32_t* cold_length = nullptr; // per Cold slot: the LZ4 bytes in its block (range.physical)
+std::size_t cold_slots = 0;
+int cold_mode = 0;                    // 1 measure, 2 compress
+unsigned cold_after = 6;              // passes untouched before a slot is compressed
+std::atomic<std::uint64_t> cold_faults{0}, cold_sampled{0}, cold_in{0}, cold_out{0};
+std::atomic<std::uint64_t> cold_made{0}, cold_restored{0}, cold_held{0}, cold_failed{0}, cold_reclaimed{0};
+std::size_t ColdBlockBytes(std::uint32_t length) noexcept {
+    return (static_cast<std::size_t>(length) + FinePage - 1) / FinePage * FinePage;
+}
+constexpr std::uint8_t ColdWatched = 0x80, ColdAgeMask = 0x7f;
+bool ColdWatchedSlot(std::size_t slot) noexcept {
+    return cold_watch != nullptr && (cold_watch[slot].load(std::memory_order_relaxed) & ColdWatched) != 0;
+}
 std::atomic<SparseRange*> probe_range{nullptr};   // the self-test's range
 std::atomic<int> service_state{0};                // 0 not tested, 1 works here, 2 does not
 const char* service_refused = "";
@@ -96,6 +112,10 @@ std::uintptr_t SlotAddress(SparseRange& range, std::size_t slot) noexcept {
 // (ReserveKeeper) and given back with the guest's memory when the session ends.
 constexpr std::size_t ReserveBlocks = 512;      // 1 GiB
 constexpr std::size_t ReserveAtStart = 16;      // taken as the service starts; the keeper takes the rest
+// What the reserve is to hold, in blocks: ReserveBlocks, or EDEN_NX2_CRAM_RESERVE_MIB (read as the
+// service starts). Ocarina of Time in Kokiri Forest: the graphics allocator found no memory while the
+// reserve still held 840 MiB that nothing used (crash-20261106-095505).
+std::atomic<std::size_t> reserve_target{ReserveBlocks};
 std::int64_t reserve[ReserveBlocks];
 std::atomic<std::size_t> reserve_count{0};
 std::atomic_flag reserve_lock = ATOMIC_FLAG_INIT;
@@ -124,7 +144,7 @@ bool ReserveBlock(std::int64_t* physical) noexcept {
 }
 // Zeroed blocks into the reserve until it holds `blocks` (at most ReserveBlocks) or the pool says no.
 void FillReserve(std::size_t blocks = ReserveBlocks) noexcept {
-    blocks = std::min(blocks, ReserveBlocks);
+    blocks = std::min(blocks, reserve_target.load(std::memory_order_relaxed));
     for (;;) {
         Spin(reserve_lock);
         const bool full = reserve_count.load(std::memory_order_relaxed) >= blocks;
@@ -252,6 +272,18 @@ bool PromoteShared(SparseRange& range, std::size_t slot) noexcept {
 void ReturnSlot(SparseRange& range, std::size_t slot) noexcept {
     const std::uintptr_t at = SlotAddress(range, slot);
     const std::uint8_t state = SlotState(range, slot);
+    if (cold_watch != nullptr) cold_watch[slot].store(0, std::memory_order_relaxed);
+#ifdef PS5_NATIVE
+    if (state == SlotCold) {
+        const std::size_t bytes = ColdBlockBytes(cold_length[slot]);
+        if (!MapSlot(at, PROT_READ, zero_block)) std::abort();
+        if (sceKernelReleaseDirectMemory(range.physical[slot], bytes) != 0) std::abort();
+        guest_committed.fetch_sub(bytes, std::memory_order_relaxed);
+        cold_held.fetch_sub(bytes, std::memory_order_relaxed);
+        range.physical[slot] = -1;
+        return;
+    }
+#endif
     if (state == SlotFine) {
         const std::size_t kept = FineKept(range, slot);
 #ifdef PS5_NATIVE
@@ -396,12 +428,105 @@ bool MakeFine(SparseRange& range, std::size_t slot, const bool (&zero)[FinePages
     return true;
 }
 
+// Own (watched, untouched) -> Cold: the slot's bytes go into a block of their LZ4 size, its 2 MiB
+// go back and its addresses stay reserved with no access, so any touch faults (ColdRestore).
+bool ColdCompress(SparseRange& range, std::size_t slot) noexcept {
+#ifdef PS5_NATIVE
+    static std::mutex packing;
+    const std::lock_guard packing_lock{packing};
+    static char packed[LZ4_COMPRESSBOUND(SparseSlot)];
+    void* const at = reinterpret_cast<void*>(SlotAddress(range, slot));
+    if (mprotect(at, SparseSlot, PROT_READ) != 0) return false;
+    const int length = LZ4_compress_default(static_cast<const char*>(at), packed, static_cast<int>(SparseSlot),
+                                            static_cast<int>(sizeof(packed)));
+    (void)mprotect(at, SparseSlot, PROT_NONE);
+    if (length <= 0 || static_cast<std::size_t>(length) > SparseSlot * 3 / 4) return false;
+    const std::size_t bytes = ColdBlockBytes(static_cast<std::uint32_t>(length));
+    std::int64_t store = -1;
+    if (eden_direct_low(bytes, FinePage, 12, &store) != 0) return false;
+    void* view = reinterpret_cast<void*>(cpu_mapping_hint);
+    if (sceKernelMapDirectMemory(&view, bytes, PROT_READ | PROT_WRITE, 0, store, FinePage) != 0) {
+        (void)sceKernelReleaseDirectMemory(store, bytes);
+        return false;
+    }
+    std::memcpy(view, packed, static_cast<std::size_t>(length));
+    if (munmap(view, bytes) != 0) std::abort();
+    if (munmap(at, SparseSlot) != 0) std::abort();
+    void* address = at;
+    if (sceKernelReserveVirtualRange(&address, SparseSlot, MAP_FIXED, SparseSlot) != 0 || address != at) {
+        // The slot shows its block again, as it was (watched: no access).
+        if (!MapSlot(reinterpret_cast<std::uintptr_t>(at), PROT_READ | PROT_WRITE, range.physical[slot])) std::abort();
+        (void)mprotect(at, SparseSlot, PROT_NONE);
+        (void)sceKernelReleaseDirectMemory(store, bytes);
+        cold_failed.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (sceKernelReleaseDirectMemory(range.physical[slot], SparseSlot) != 0) std::abort();
+    range.physical[slot] = store;
+    cold_length[slot] = static_cast<std::uint32_t>(length);
+    guest_committed.fetch_sub(SparseSlot - bytes, std::memory_order_relaxed);
+    cold_held.fetch_add(bytes, std::memory_order_relaxed);
+    cold_made.fetch_add(1, std::memory_order_relaxed);
+    cold_watch[slot].store(0, std::memory_order_relaxed);
+    return true;
+#else
+    (void)range;
+    (void)slot;
+    return false;
+#endif
+}
+
+// Cold -> Own: a block of 2 MiB again, the bytes unpacked into it before it is shown.
+bool ColdRestore(SparseRange& range, std::size_t slot) noexcept {
+#ifdef PS5_NATIVE
+    const std::uintptr_t at = SlotAddress(range, slot);
+    const std::uint32_t length = cold_length[slot];
+    const std::size_t bytes = ColdBlockBytes(length);
+    std::int64_t physical = -1;
+    if (eden_direct_low(SparseSlot, SparseSlot, 12, &physical) != 0 && !ReserveBlock(&physical)) return false;
+    void* view = reinterpret_cast<void*>(cpu_mapping_hint);
+    if (sceKernelMapDirectMemory(&view, SparseSlot, PROT_READ | PROT_WRITE, 0, physical, SparseSlot) != 0) {
+        (void)sceKernelReleaseDirectMemory(physical, SparseSlot);
+        return false;
+    }
+    void* source = reinterpret_cast<void*>(cpu_mapping_hint);
+    if (sceKernelMapDirectMemory(&source, bytes, PROT_READ, 0, range.physical[slot], FinePage) != 0) {
+        (void)munmap(view, SparseSlot);
+        (void)sceKernelReleaseDirectMemory(physical, SparseSlot);
+        return false;
+    }
+    const int out = LZ4_decompress_safe(static_cast<const char*>(source), static_cast<char*>(view),
+                                        static_cast<int>(length), static_cast<int>(SparseSlot));
+    if (out != static_cast<int>(SparseSlot)) {
+        Note("EDEN_CRAM_COLD a compressed slot did not unpack whole\n");
+        std::abort();
+    }
+    if (munmap(source, bytes) != 0 || munmap(view, SparseSlot) != 0) std::abort();
+    if (!MapSlot(at, PROT_READ | PROT_WRITE, physical)) {
+        (void)sceKernelReleaseDirectMemory(physical, SparseSlot);
+        return false;
+    }
+    if (sceKernelReleaseDirectMemory(range.physical[slot], bytes) != 0) std::abort();
+    range.physical[slot] = physical;
+    guest_committed.fetch_add(SparseSlot - bytes, std::memory_order_relaxed);
+    cold_held.fetch_sub(bytes, std::memory_order_relaxed);
+    cold_restored.fetch_add(1, std::memory_order_relaxed);
+    cold_watch[slot].store(0, std::memory_order_relaxed);
+    return true;
+#else
+    (void)range;
+    (void)slot;
+    return false;
+#endif
+}
+
 // CommitSparsePage for a range with slot states.
 bool ServiceCommit(SparseRange& range, std::size_t slot) noexcept {
     LockSlot(range, slot);
     const std::uint8_t state = SlotState(range, slot);
-    const bool ok = state == SlotZero ? PromoteZero(range, slot) : state == SlotFine ? PromoteFine(range, slot) : true;
-    UnlockSlot(range, slot, ok && (state == SlotZero || state == SlotFine) ? SlotOwn : state);
+    const bool ok = state == SlotZero ? PromoteZero(range, slot) : state == SlotFine ? PromoteFine(range, slot)
+                  : state == SlotCold ? ColdRestore(range, slot) : true;
+    UnlockSlot(range, slot, ok && (state == SlotZero || state == SlotFine || state == SlotCold) ? SlotOwn : state);
     return ok;
 }
 
@@ -425,6 +550,37 @@ void Refused(std::uintptr_t address, unsigned why, std::uint8_t state) noexcept 
     refused_address.store(address, std::memory_order_release);
 }
 } // namespace
+
+// Graphics found no memory (vulkan_memory_allocator.h, RelieveMemory): compress watched slots now,
+// up to `want` bytes given back or 256 slots, from where the last call stopped. Bytes given back.
+extern "C" std::size_t eden_guest_memory_reclaim(std::size_t want) noexcept {
+    SparseRange* const range = service_range.load(std::memory_order_acquire);
+    if (range == nullptr || cold_mode != 2 || cold_watch == nullptr) return 0;
+    static std::mutex reclaiming;
+    static std::size_t cursor = 0;
+    const std::lock_guard lock{reclaiming};
+    const std::size_t slots = std::min((range->end - range->begin.load(std::memory_order_relaxed)) / SparseSlot, cold_slots);
+    std::size_t freed = 0, made = 0, looked = 0;
+    for (; looked < slots && freed < want && made < 256; ++looked) {
+        const std::size_t slot = (cursor + looked) % slots;
+        if (SlotState(*range, slot) != SlotOwn || !ColdWatchedSlot(slot)) continue;
+        LockSlot(*range, slot);
+        if (SlotState(*range, slot) == SlotOwn && ColdWatchedSlot(slot) && ColdCompress(*range, slot)) {
+            ++made;
+            freed += SparseSlot - ColdBlockBytes(cold_length[slot]);
+            UnlockSlot(*range, slot, SlotCold);
+            continue;
+        }
+        UnlockSlot(*range, slot, SlotState(*range, slot));
+    }
+    cursor = slots != 0 ? (cursor + looked) % slots : 0;
+    cold_reclaimed.fetch_add(made, std::memory_order_relaxed);
+    char line[128];
+    const int length = std::snprintf(line, sizeof(line), "EDEN_CRAM_COLD reclaim for graphics: %zu slots, %zu MiB given back\n",
+                                     made, freed >> 20);
+    if (length > 0) Report(line);
+    return freed;
+}
 
 // The last write the service refused (headless/crash_report.cpp): its address, 0 for none.
 extern "C" std::uintptr_t eden_guest_write_refused(unsigned* why, unsigned* state) noexcept {
@@ -520,7 +676,7 @@ extern "C" void eden_guest_memory_reserve(std::size_t* held, std::size_t* target
 #ifdef PS5_NATIVE
     const bool running = service_range.load(std::memory_order_acquire) != nullptr;
     *held = running ? reserve_count.load(std::memory_order_relaxed) * SparseSlot : 0;
-    *target = running ? ReserveBlocks * SparseSlot : 0;
+    *target = running ? reserve_target.load(std::memory_order_relaxed) * SparseSlot : 0;
 #else
     *held = 0;
     *target = 0;
@@ -568,6 +724,15 @@ bool HandleGuestWriteFault(void* fault) noexcept {
         UnlockSlot(*range, slot, state);
         return true;
     }
+    if (state == SlotOwn && ColdWatchedSlot(slot)) {
+        const bool back = mprotect(reinterpret_cast<void*>(SlotAddress(*range, slot)), SparseSlot,
+                                   PROT_READ | PROT_WRITE) == 0;
+        if (back) cold_watch[slot].store(0, std::memory_order_relaxed);
+        cold_faults.fetch_add(1, std::memory_order_relaxed);
+        UnlockSlot(*range, slot, SlotOwn);
+        repeats = 0;
+        return back;
+    }
     const auto promote = [&]() noexcept {
         bool done = true;
         if (state == SlotFine) {
@@ -580,6 +745,8 @@ bool HandleGuestWriteFault(void* fault) noexcept {
             }
         } else if (state == SlotShared) {
             done = PromoteShared(*range, slot);
+        } else if (state == SlotCold) {
+            done = ColdRestore(*range, slot);
         }
         return done;
     };
@@ -805,12 +972,74 @@ bool ScanShare(SparseRange& range, std::size_t keep, std::size_t other) noexcept
     return shared;
 }
 
+// Every Own slot loses its access (or, watched since the last pass, ages); up to 32 slots untouched
+// for 3 passes or more are compressed to measure what they would hold.
+#ifdef PS5_NATIVE
+extern "C" std::int32_t sceKernelAvailableDirectMemorySize(std::int64_t, std::int64_t, std::size_t, std::int64_t*, std::size_t*);
+extern "C" std::int64_t sceKernelGetDirectMemorySize();
+#endif
+// The pool is short: its largest free block is under 512 MiB (what graphics allocations need).
+bool ColdPoolShort() noexcept {
+#ifdef PS5_NATIVE
+    std::int64_t start = 0;
+    std::size_t largest = 0;
+    const std::int64_t total = sceKernelGetDirectMemorySize();
+    return total > 0 && sceKernelAvailableDirectMemorySize(0, total, 0x4000, &start, &largest) == 0 && largest < (512u << 20);
+#else
+    return false;
+#endif
+}
+std::atomic<std::uint64_t> cold_short_passes{0};
+
+void ColdPass(SparseRange& range, std::size_t slots) noexcept {
+    static char packed[LZ4_COMPRESSBOUND(SparseSlot)];
+    unsigned sampled = 0, made = 0;
+    const bool pool_short = cold_mode == 2 && ColdPoolShort();
+    if (pool_short) cold_short_passes.fetch_add(1, std::memory_order_relaxed);
+    const unsigned after = pool_short ? 1u : cold_after;
+    const unsigned most = pool_short ? 512 : 128;
+    for (std::size_t slot = 0; slot < slots; ++slot) {
+        if (SlotState(range, slot) != SlotOwn) continue;
+        LockSlot(range, slot);
+        {
+            if (SlotState(range, slot) == SlotOwn) {
+                void* const at = reinterpret_cast<void*>(SlotAddress(range, slot));
+                const std::uint8_t watch = cold_watch[slot].load(std::memory_order_relaxed);
+                if (watch & ColdWatched) {
+                    const std::uint8_t age = static_cast<std::uint8_t>(std::min<unsigned>((watch & ColdAgeMask) + 1u, ColdAgeMask));
+                    cold_watch[slot].store(ColdWatched | age, std::memory_order_relaxed);
+                    if (cold_mode == 2 && age >= after && made < most) {
+                        if (ColdCompress(range, slot)) {
+                            ++made;
+                            UnlockSlot(range, slot, SlotCold);
+                            continue;
+                        }
+                        // Not worth it (or no block for it): it waits as long again.
+                        cold_watch[slot].store(ColdWatched, std::memory_order_relaxed);
+                    } else if (age >= 3 && sampled < 32 && mprotect(at, SparseSlot, PROT_READ) == 0) {
+                        const int out = LZ4_compress_default(static_cast<const char*>(at), packed, static_cast<int>(SparseSlot),
+                                                             static_cast<int>(sizeof(packed)));
+                        (void)mprotect(at, SparseSlot, PROT_NONE);
+                        ++sampled;
+                        cold_sampled.fetch_add(1, std::memory_order_relaxed);
+                        cold_in.fetch_add(SparseSlot, std::memory_order_relaxed);
+                        cold_out.fetch_add(out > 0 ? static_cast<std::uint64_t>(out) : SparseSlot, std::memory_order_relaxed);
+                    }
+                } else if (mprotect(at, SparseSlot, PROT_NONE) == 0) {
+                    cold_watch[slot].store(ColdWatched, std::memory_order_relaxed);
+                }
+            }
+            UnlockSlot(range, slot, SlotState(range, slot));
+        }
+    }
+}
+
 void ScanPass(SparseRange& range) noexcept {
     const auto start = std::chrono::steady_clock::now();
     const std::size_t slots = (range.end - range.begin.load(std::memory_order_relaxed)) / SparseSlot;
     std::vector<std::pair<std::uint64_t, std::size_t>> samples;
     for (std::size_t slot = 0; slot < slots; ++slot) {
-        if (SlotState(range, slot) != SlotOwn) continue;
+        if (SlotState(range, slot) != SlotOwn || ColdWatchedSlot(slot)) continue;
         const std::uintptr_t at = SlotAddress(range, slot);
         if (AllZero(at)) { // a read without the lock: only a hint, checked again fenced
             if (ScanZero(range, slot)) counters.returns_scan.fetch_add(1, std::memory_order_relaxed);
@@ -840,12 +1069,43 @@ void ScanPass(SparseRange& range) noexcept {
         }
         i = j;
     }
+    if (cold_watch != nullptr) ColdPass(range, slots);
     counters.passes.fetch_add(1, std::memory_order_relaxed);
     counters.scan_ns.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count()), std::memory_order_relaxed);
 }
 
+void ColdReport(SparseRange& range) noexcept {
+    if (cold_watch == nullptr) return;
+    const std::size_t slots = (range.end - range.begin.load(std::memory_order_relaxed)) / SparseSlot;
+    std::size_t watched = 0, age1 = 0, age3 = 0, age6 = 0, age15 = 0, cold = 0;
+    for (std::size_t slot = 0; slot < slots; ++slot) {
+        cold += SlotState(range, slot) == SlotCold;
+        const std::uint8_t watch = cold_watch[slot].load(std::memory_order_relaxed);
+        if (!(watch & ColdWatched)) continue;
+        const unsigned age = watch & ColdAgeMask;
+        ++watched;
+        age1 += age >= 1;
+        age3 += age >= 3;
+        age6 += age >= 6;
+        age15 += age >= 15;
+    }
+    const std::uint64_t in = cold_in.load(), out = cold_out.load();
+    char line[420];
+    const int length = std::snprintf(line, sizeof(line),
+        "EDEN_CRAM_COLD MiB untouched: watched=%zu 20s=%zu 60s=%zu 120s=%zu 300s=%zu; faults=%llu; lz4 sampled=%llu slots, %llu%% of size; "
+        "cold=%zu slots in %llu MiB (made %llu, restored %llu, failed %llu, short passes %llu)\n",
+        watched * 2, age1 * 2, age3 * 2, age6 * 2, age15 * 2,
+        static_cast<unsigned long long>(cold_faults.load()), static_cast<unsigned long long>(cold_sampled.load()),
+        static_cast<unsigned long long>(in != 0 ? out * 100 / in : 0), cold,
+        static_cast<unsigned long long>(cold_held.load() >> 20), static_cast<unsigned long long>(cold_made.load()),
+        static_cast<unsigned long long>(cold_restored.load()), static_cast<unsigned long long>(cold_failed.load()),
+        static_cast<unsigned long long>(cold_short_passes.load()));
+    if (length > 0) Report(line);
+}
+
 void ServiceReport(SparseRange& range, const char* when) noexcept {
+    ColdReport(range);
     const std::size_t slots = (range.end - range.begin.load(std::memory_order_relaxed)) / SparseSlot;
     std::size_t own = 0, shared = 0, fine = 0, fine_kept = 0;
     for (std::size_t slot = 0; slot < slots; ++slot) {
@@ -915,7 +1175,7 @@ void MeasureFinePages(SparseRange& range) noexcept {
     std::vector<std::uint64_t> hashes;
     std::size_t pages = 0, zero = 0;
     for (std::size_t slot = 0; slot < slots; ++slot) {
-        if (SlotState(range, slot) != SlotOwn) continue;
+        if (SlotState(range, slot) != SlotOwn || ColdWatchedSlot(slot)) continue;
         for (std::size_t offset = 0; offset < SparseSlot; offset += Fine) {
             const std::uintptr_t at = SlotAddress(range, slot) + offset;
             ++pages;
@@ -940,7 +1200,9 @@ void ScannerLoop(SparseRange* range) {
     auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     std::unique_lock lock{scanner_mutex};
     while (!scanner_stop) {
-        scanner_wake.wait_for(lock, std::chrono::seconds(20), [] { return scanner_stop; });
+        // Every 20 s; every 5 s while cold compression runs and the pool is short.
+        const bool hurry = cold_mode == 2 && cold_watch != nullptr && ColdPoolShort();
+        scanner_wake.wait_for(lock, std::chrono::seconds(hurry ? 5 : 20), [] { return scanner_stop; });
         if (scanner_stop) break;
         lock.unlock();
         if (scan_requested.load(std::memory_order_relaxed)) ScanPass(*range);
@@ -1078,6 +1340,36 @@ void ServiceStart(SparseRange& range) noexcept {
     }
     ResetCounters();
     range.promote = true;
+    if (const char* cold = std::getenv("EDEN_NX2_CRAM_COLD"); cold != nullptr && (cold[0] == '1' || cold[0] == '2')) {
+        const std::size_t slots = (range.end - range.begin.load(std::memory_order_relaxed)) / SparseSlot;
+        if (cold_watch == nullptr || cold_slots < slots) {
+            // An older array is left as it is (never freed): nothing may read a freed one.
+            cold_watch = new (std::nothrow) std::atomic<std::uint8_t>[slots]();
+            cold_length = new (std::nothrow) std::uint32_t[slots]();
+            cold_slots = cold_watch != nullptr && cold_length != nullptr ? slots : 0;
+            if (cold_slots == 0) cold_watch = nullptr;
+        }
+        if (cold_watch != nullptr) {
+            for (std::size_t slot = 0; slot < cold_slots; ++slot) cold_watch[slot].store(0, std::memory_order_relaxed);
+            cold_mode = cold[0] - '0';
+            if (const char* passes = std::getenv("EDEN_NX2_CRAM_COLD_PASSES"); passes != nullptr && std::atoi(passes) > 0)
+                cold_after = static_cast<unsigned>(std::min(std::atoi(passes), 120));
+            cold_faults = 0; cold_sampled = 0; cold_in = 0; cold_out = 0;
+            cold_made = 0; cold_restored = 0; cold_failed = 0;
+        }
+        char line[128];
+        const int length = std::snprintf(line, sizeof(line), "EDEN_CRAM_COLD %s (EDEN_NX2_CRAM_COLD=%c, after %u passes)\n",
+                                         cold_watch == nullptr ? "no memory for the watch" : cold_mode == 2 ? "compressing" : "measuring",
+                                         cold[0], cold_after);
+        if (length > 0) Report(line);
+    }
+    {
+        const char* value = std::getenv("EDEN_NX2_CRAM_RESERVE_MIB");
+        const long mib = value != nullptr ? std::atol(value) : -1;
+        reserve_target.store(mib >= 0 ? std::min<std::size_t>(static_cast<std::size_t>(mib) / (SparseSlot >> 20), ReserveBlocks)
+                                      : ReserveBlocks,
+                             std::memory_order_relaxed);
+    }
 #ifdef PS5_NATIVE
     FillReserve(ReserveAtStart);
 #endif
@@ -1091,11 +1383,12 @@ void ServiceStart(SparseRange& range) noexcept {
 #ifdef PS5_NATIVE
     keeper = std::thread(ReserveKeeper);
 #endif
-    char line[128];
-    const int length = std::snprintf(line, sizeof(line), "EDEN_CRAM on: scan=%d dedup=%d fine=%d reserve=%zuMiB\n",
+    char line[160];
+    const int length = std::snprintf(line, sizeof(line), "EDEN_CRAM on: scan=%d dedup=%d fine=%d reserve=%zuMiB (to hold %zuMiB)\n",
                                      scan_requested.load() ? 1 : 0, dedup_requested.load() ? 1 : 0,
                                      fine_requested.load() ? 1 : 0,
-                                     reserve_count.load() * (SparseSlot >> 20));
+                                     reserve_count.load() * (SparseSlot >> 20),
+                                     reserve_target.load() * (SparseSlot >> 20));
     if (length > 0) Report(line);
 }
 
@@ -1128,6 +1421,10 @@ void ReleaseServiceBlocks(SparseRange& range) noexcept {
             const std::size_t kept = FineKept(range, slot);
             if (kept != 0 && sceKernelReleaseDirectMemory(range.physical[slot], kept * FinePage) != 0) std::abort();
             guest_committed.fetch_sub(kept * FinePage, std::memory_order_relaxed);
+        } else if (state == SlotCold) {
+            const std::size_t bytes = ColdBlockBytes(cold_length[slot]);
+            if (sceKernelReleaseDirectMemory(range.physical[slot], bytes) != 0) std::abort();
+            guest_committed.fetch_sub(bytes, std::memory_order_relaxed);
         } else if (state == SlotOwn) {
             if (sceKernelReleaseDirectMemory(range.physical[slot], SparseSlot) != 0) std::abort();
         } else if (state == SlotShared && UnshareBlock(range.physical[slot]) == 0) {

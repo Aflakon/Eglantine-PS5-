@@ -1,0 +1,37 @@
+--- a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
++++ b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
+@@ -5,6 +5,7 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <array>
+ #include <bit>
+ #include <limits>
+@@ -289,6 +290,15 @@
+                      ci.arrayLayers, static_cast<u32>(ci.format), static_cast<int>(result));
+     }
+     vk::Check(result);
++    // Large images, with the running total of large allocations: which ones fill the shared
++    // pool when a scene loads (PS5: Ocarina of Time ran out of graphics memory at its first scene).
++    if (alloc_info.size >= (VkDeviceSize{8} << 20)) {
++        static std::atomic<u64> big_total{};
++        const u64 total = big_total.fetch_add(alloc_info.size) + alloc_info.size;
++        LOG_INFO(Render_Vulkan, "EDEN_BIG_ALLOC image {}x{}x{} levels {} layers {} format {}: {} MiB (large ones so far {} MiB)",
++                 ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels, ci.arrayLayers,
++                 static_cast<u32>(ci.format), alloc_info.size >> 20, total >> 20);
++    }
+ 
+     // Log GPU memory allocation for images
+     if (GPU::Logging::IsActive() &&
+@@ -425,6 +435,10 @@
+ 
+     if (!CreateBufferInSeparatePool(ci, usage, alloc_ci, handle, allocation, alloc_info)) {
+         vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
++        if (alloc_info.size >= (VkDeviceSize{8} << 20)) {
++            LOG_INFO(Render_Vulkan, "EDEN_BIG_ALLOC buffer {} MiB usage {:#x}", alloc_info.size >> 20,
++                     static_cast<u32>(ci.usage));
++        }
+     }
+     vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
+ 

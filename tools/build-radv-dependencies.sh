@@ -13,6 +13,10 @@ for check in "ps5-vulkan-tools $vulkan" "ps5-mesa $PS5_MESA_FORK" "ps5-payload-s
     [[ $(git -C "$path" rev-parse HEAD) == "$(pin "$name")" ]] ||
         { echo "$path is not at the $name revision pinned in tools/deps.json" >&2; exit 1; }
 done
+# Its build script names a Mesa revision of its own: the one to build is the one pinned here.
+sed -i -E "s/^mesa_revision=[0-9a-f]{40}$/mesa_revision=$(pin ps5-mesa)/" "$vulkan/tools/build-radv.sh"
+grep -qx "mesa_revision=$(pin ps5-mesa)" "$vulkan/tools/build-radv.sh" ||
+    { echo "tools/build-radv.sh does not name a Mesa revision as expected" >&2; exit 1; }
 # 24 parallel jobs unless RADV_BUILD_JOBS says otherwise: hosted CI runners have a few cores
 # and too little memory for 24 compilers (.github/workflows/release.yml sets it).
 jobs=${RADV_BUILD_JOBS:-24}

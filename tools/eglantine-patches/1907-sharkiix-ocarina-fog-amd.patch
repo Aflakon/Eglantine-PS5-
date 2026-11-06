@@ -1,0 +1,53 @@
+diff --git a/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp b/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp
+index babea58b1a..3757f2c1e9 100644
+--- a/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp
++++ b/src/video_core/renderer_vulkan/fixed_pipeline_state.cpp
+@@ -254,7 +254,10 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
+         dynamic_state.Refresh2(regs, topology_, extended_dynamic_state_2);
+     }
+     if (!extended_dynamic_state_3_blend) {
+-        if (maxwell3d.dirty.flags[Dirty::Blending]) {
++        // Always rebuilt (Shakoquo/Lichii-sharkiix-version): a blend register written without raising
++        // Dirty::Blending (native Switch 2 command paths) left a stale state in the key (Ocarina's
++        // forest fog drawn without blending on GPUs without dynamic blend state, e.g. AMD).
++        {
+             maxwell3d.dirty.flags[Dirty::Blending] = false;
+             for (size_t index = 0; index < attachments.size(); ++index) {
+                 attachments[index].Refresh(regs, index);
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.cpp b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+index 908978f701..e08dabe99d 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -4679,6 +4679,10 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
+     key.drop_reduction = has_minmax_reduction && !image_view.SupportsMinmaxFilter();
+     key.drop_custom_border = has_custom_border_colors && image_view.RequiresBorderColorFormat();
+     key.srgb_border = has_srgb_border_color && IsPixelFormatSRGB(image_view.format);
++    // A compare-enabled TSC read by a plain (non-Dref) sample: Maxwell ignores the comparison,
++    // Vulkan leaves it undefined and AMD returns the 0/1 compare result (Ocarina's forest fog
++    // composite). Use a variant without comparison (Shakoquo/Lichii-sharkiix-version).
++    key.drop_compare = has_depth_comparison && !is_depth;
+     if (needs_swizzle_mapping && !key.drop_custom_border && !image_view.HasIdentitySwizzle()) {
+         const VkComponentMapping& mapping = image_view.Swizzle();
+         key.swizzle = {mapping.r, mapping.g, mapping.b, mapping.a};
+@@ -4742,6 +4746,9 @@ VkSampler Sampler::Emplace(VariantKey key) {
+     }
+ 
+     VkSamplerCreateInfo create_info = base_ci;
++    if (key.drop_compare) {
++        create_info.compareEnable = VK_FALSE;
++    }
+     create_info.pNext = chain;
+     if (key.force_nearest) {
+         create_info.magFilter = VK_FILTER_NEAREST;
+diff --git a/src/video_core/renderer_vulkan/vk_texture_cache.h b/src/video_core/renderer_vulkan/vk_texture_cache.h
+index 4b3791ac71..f53a752dc7 100644
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -853,6 +853,7 @@ private:
+         bool drop_reduction;
+         bool drop_custom_border;
+         bool srgb_border;
++        bool drop_compare;
+         std::array<VkComponentSwizzle, 4> swizzle;
+ 
+         bool operator==(const VariantKey&) const noexcept = default;

@@ -8,6 +8,8 @@ scratch=$(cat "$root/.local/headless-cache")
 export PS5_PAYLOAD_SDK="$scratch/sdk"
 source="$scratch/source/.cache/cpm/ffmpeg/c7b5f1537d"
 test -f "$source/configure"
+[[ -f "$scratch/dav1d-native/install/lib/libdav1d.a" ]] || bash "$root/tools/build-headless-dav1d.sh"
+export PKG_CONFIG_PATH="$scratch/dav1d-native/install/libdata/pkgconfig"
 mkdir -p "$scratch/ffmpeg-native"
 cd "$scratch/ffmpeg-native"
 # Use the same pinned, minimal decoder set as the Linux core. Avoid the full
@@ -18,7 +20,9 @@ bash "$source/configure" --prefix="$scratch/ffmpeg-native/install" \
     --ar=llvm-ar-18 --ranlib=llvm-ranlib-18 --nm=llvm-nm-18 \
     --disable-autodetect --disable-everything --disable-programs --disable-doc \
     --disable-avdevice --disable-avformat --disable-network --disable-swresample \
-    --enable-decoder=h264,vp8,vp9 --enable-filter=yadif,scale --enable-pic \
+    --enable-libdav1d --enable-decoder=h264,vp8,vp9,libdav1d --pkg-config=pkg-config --pkg-config-flags=--static --enable-filter=yadif,scale --enable-pic \
     --enable-pthreads --disable-shared --enable-static
 make -j"${EDEN_BUILD_JOBS:-$(nproc)}"
 make install
+# The app links the FFmpeg libraries by name, so dav1d travels inside libavcodec.
+llvm-ar-18 qLs "$scratch/ffmpeg-native/install/lib/libavcodec.a" "$scratch/dav1d-native/install/lib/libdav1d.a"

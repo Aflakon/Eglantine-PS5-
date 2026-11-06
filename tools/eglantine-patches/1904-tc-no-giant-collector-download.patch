@@ -1,0 +1,29 @@
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -159,7 +159,25 @@
+         if (True(image.flags & ImageFlagBits::IsDecoding)) {
+             return false;
+         }
+-        const bool must_download = IsDownloadable(image) && False(image.flags & ImageFlagBits::BadOverlap);
++        // A download needs a staging buffer and a heap block as large as the image, at the moment
++        // memory is short: evicting a 288 MiB image ended Ocarina of Time (crash-20261106-102813).
++        // An image larger than EDEN_NX2_TC_DOWNLOAD_MAX_MIB (default 64) the GPU wrote stays while
++        // memory is not critical, and then goes without its contents.
++        static const u64 download_max = [] {
++            const char* value = std::getenv("EDEN_NX2_TC_DOWNLOAD_MAX_MIB");
++            return (value != nullptr ? std::strtoull(value, nullptr, 10) : 64ULL) << 20;
++        }();
++        const bool dirty_image = IsDownloadable(image) && False(image.flags & ImageFlagBits::BadOverlap);
++        const bool drop_contents = dirty_image && download_max != 0 && image.unswizzled_size_bytes > download_max;
++        if (drop_contents) {
++            if (!aggressive_mode && total_used_memory < critical_memory) {
++                return false;
++            }
++            LOG_INFO(HW_GPU, "EDEN_TC_DROP {} MiB image {}x{}x{} layers {} format {} deleted without download",
++                     image.unswizzled_size_bytes >> 20, image.info.size.width, image.info.size.height,
++                     image.info.size.depth, image.info.resources.layers, static_cast<int>(image.info.format));
++        }
++        const bool must_download = dirty_image && !drop_contents;
+         if ((!aggressive_mode && !evict_old_costly && True(image.flags & ImageFlagBits::CostlyLoad)) ||
+             (!high_priority_mode && must_download)) {
+             return false;

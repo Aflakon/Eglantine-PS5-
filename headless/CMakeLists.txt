@@ -688,10 +688,15 @@ foreach(bits 32 64)
       # Guest cores 0-2 share a 640 MiB code budget. A64: 256/192/192, since a large
       # open-world game's workers filled 64 MiB on cores 1/2 and evacuated whole caches
       # while streaming. A32 keeps the qualified 512/64/64.
-      # Only the active architecture allocates these caches; core3/host stay 16 MiB.
+      # Switch 2 titles run game threads on cores 3-5 too: Ocarina of Time's first scene
+      # filled their 16 MiB every 1-6 s and evacuated whole caches (~600 times in 10
+      # minutes, ~1 frame a second). A64 cores 3+ get 128 MiB; these caches are address
+      # space with memory committed 16 MiB at a time as the JIT fills them
+      # (ReserveCodeRange), so a core that needs little takes little.
+      # Only the active architecture allocates these caches; A32 core3/host stay 16 MiB.
       if(PS5_NATIVE)
           if(bits EQUAL 64)
-              set(jit_cache_sizes "m_core_index == 0 ? 256_MiB : m_core_index < 3 ? 192_MiB : 16_MiB")
+              set(jit_cache_sizes "m_core_index == 0 ? 256_MiB : m_core_index < 3 ? 192_MiB : 128_MiB")
           else()
               set(jit_cache_sizes "m_core_index == 0 ? 512_MiB : m_core_index < 3 ? 64_MiB : 16_MiB")
           endif()

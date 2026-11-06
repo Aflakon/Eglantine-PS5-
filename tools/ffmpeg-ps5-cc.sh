@@ -8,7 +8,7 @@ link=true
 for argument in "$@"; do
     case "$argument" in
         -c|-E|-S|-M|-MM|--version) link=false; arguments+=("$argument") ;;
-        -lm|-lpthread|-pthread) ;;
+        -lm|-ldl|-lpthread|-pthread) ;;
         *) arguments+=("$argument") ;;
     esac
 done

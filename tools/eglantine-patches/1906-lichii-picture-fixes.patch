@@ -1,0 +1,267 @@
+diff --git a/src/shader_recompiler/ir_opt/oot_visual_workaround.h b/src/shader_recompiler/ir_opt/oot_visual_workaround.h
+new file mode 100644
+index 0000000000..b685dbab8e
+--- /dev/null
++++ b/src/shader_recompiler/ir_opt/oot_visual_workaround.h
+@@ -0,0 +1,74 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include <optional>
++#include <utility>
++#include <vector>
++
++#include "shader_recompiler/frontend/ir/ir_emitter.h"
++#include "shader_recompiler/frontend/ir/program.h"
++
++namespace Shader::Optimization {
++
++// TEMPORARY opt-in visual workaround for Ocarina of Time, not an emulator fix.
++inline std::optional<size_t> ApplyOotVisualWorkaround(IR::Program& program, u64 title_id,
++                                                     u64 shader_hash, bool enabled) {
++    if (!enabled || title_id != 0x0400486024DEC000ULL) {
++        return std::nullopt;
++    }
++    const bool fog = shader_hash == 0x780c0536b89fc89eULL && program.stage == Stage::Compute;
++    const bool exposure = shader_hash == 0xbded5ce917183214ULL && program.stage == Stage::Fragment;
++    if (!fog && !exposure) {
++        return std::nullopt;
++    }
++    const auto has_opcode = [](const IR::Value& value, IR::Opcode opcode) {
++        return !value.IsImmediate() && value.InstRecursive()->GetOpcode() == opcode;
++    };
++    const auto negative_exp = [&](const IR::Value& value) {
++        if (has_opcode(value, IR::Opcode::FPNeg32)) {
++            return has_opcode(value.InstRecursive()->Arg(0), IR::Opcode::FPExp2);
++        }
++        if (!has_opcode(value, IR::Opcode::BitCastF32U32)) {
++            return false;
++        }
++        const auto bits = value.InstRecursive()->Arg(0);
++        if (!has_opcode(bits, IR::Opcode::BitwiseXor32)) {
++            return false;
++        }
++        const auto* flip = bits.InstRecursive();
++        const auto source = flip->Arg(0);
++        return flip->Arg(1).IsImmediate() && flip->Arg(1).U32() == 0x80000000U &&
++               has_opcode(source, IR::Opcode::BitCastU32F32) &&
++               has_opcode(source.InstRecursive()->Arg(0), IR::Opcode::FPExp2);
++    };
++    std::vector<std::pair<IR::Block*, IR::Inst*>> matches;
++    for (IR::Block* block : program.blocks) {
++        for (IR::Inst& inst : block->Instructions()) {
++            if (fog && inst.GetOpcode() == IR::Opcode::FPAdd32 &&
++                ((negative_exp(inst.Arg(0)) && has_opcode(inst.Arg(1), IR::Opcode::FPExp2)) ||
++                 (negative_exp(inst.Arg(1)) && has_opcode(inst.Arg(0), IR::Opcode::FPExp2)))) {
++                matches.emplace_back(block, &inst);
++            }
++            if (exposure && inst.GetOpcode() == IR::Opcode::GetCbufF32 &&
++                inst.Arg(0).IsImmediate() && inst.Arg(0).U32() == 3 &&
++                inst.Arg(1).IsImmediate() && inst.Arg(1).U32() == 0x38) {
++                matches.emplace_back(block, &inst);
++            }
++        }
++    }
++    if ((fog && matches.size() != 1) || (exposure && (matches.empty() || matches.size() > 3))) {
++        return 0;
++    }
++    for (const auto& [block, inst] : matches) {
++        const auto insertion = block->Instructions().iterator_to(*inst);
++        const auto original = block->PrependNewInst(insertion, *inst);
++        IR::IREmitter ir{*block, insertion};
++        const auto scaled = ir.FPMul(IR::F32{IR::Value{&*original}},
++                                     ir.Imm32(fog ? 0.25f : 0.65f));
++        inst->ReplaceUsesWith(scaled);
++    }
++    return matches.size();
++}
++
++} // namespace Shader::Optimization
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index 090175bf11..5099898114 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -782,6 +782,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+             cmdbuf.BindDescriptorBuffersEXT(binding_info);
+         }
+         if (bind_pipeline) {
++            scheduler.SetGraphicsPipelineMissing(!pipeline);
+             if (!pipeline) {
+                 return;
+             }
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+index 1cae9b24a0..3b718f4df8 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+@@ -7,10 +7,12 @@
+ #include <algorithm>
+ #include <chrono>
+ #include <cstddef>
++#include <cstdlib>
+ #include <fstream>
+ #include <iostream>
+ #include <memory>
+ #include <span>
++#include <string_view>
+ #include <thread>
+ #include <vector>
+ #include <bit>
+@@ -26,6 +28,7 @@
+ #include "shader_recompiler/frontend/maxwell/control_flow.h"
+ #include "shader_recompiler/frontend/maxwell/translate_program.h"
+ #include "shader_recompiler/ir_opt/passes.h"
++#include "shader_recompiler/ir_opt/oot_visual_workaround.h"
+ #include "shader_recompiler/program_header.h"
+ #include "video_core/engines/kepler_compute.h"
+ #include "video_core/engines/maxwell_3d.h"
+@@ -395,6 +398,10 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
+       use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
+       use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue() &&
+                                 !DriverCachesPipelines(device_)},
++      oot_visual_workaround{[] {
++          const char* value = std::getenv("EDEN_NX2_OOT_VISUAL_WORKAROUND");
++          return value != nullptr && std::string_view{value} == "1";
++      }()},
+       workers(device.HasBrokenParallelShaderCompiling() ? 1ULL : GetTotalPipelineWorkers(),
+               "VkPipelineBuilder", {}, Common::ThreadPlacement::Background),
+       serialization_thread(1, "VkPipelineSerialization", {},
+@@ -755,6 +762,7 @@ ComputePipeline* PipelineCache::CurrentComputePipeline() {
+ 
+ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
+                                       const VideoCore::DiskResourceLoadCallback& callback) {
++    visual_workaround_title = title_id;
+     if (title_id == 0) {
+         return;
+     }
+@@ -1153,6 +1161,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+             programs[index] = MergeDualVertexPrograms(program_va, program_vb, env);
+         }
+ 
++        if (const auto edits = Shader::Optimization::ApplyOotVisualWorkaround(
++                programs[index], program_id != 0 ? program_id : visual_workaround_title,
++                key.unique_hashes[index],
++                oot_visual_workaround)) {
++            LOG_WARNING(Render_Vulkan,
++                        "TEMPORARY OoT visual workaround: shader {:016x}, {} scalar edits",
++                        key.unique_hashes[index], *edits);
++        }
+         if (device.GetDriverID() != VK_DRIVER_ID_NVIDIA_PROPRIETARY && Shader::Optimization::HasBrokenPattern(programs[index])) {
+             LOG_WARNING(Render_Vulkan, "0x{:016x}: Skipping shader with known issues", key.unique_hashes[index]);
+             return nullptr;
+@@ -1416,6 +1432,13 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
+     }
+ 
+     auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
++    if (const auto edits = Shader::Optimization::ApplyOotVisualWorkaround(
++            program, program_id != 0 ? program_id : visual_workaround_title, key.unique_hash,
++            oot_visual_workaround)) {
++        LOG_WARNING(Render_Vulkan,
++                    "TEMPORARY OoT visual workaround: shader {:016x}, {} scalar edits",
++                    key.unique_hash, *edits);
++    }
+     const VkDriverIdKHR driver_id = device.GetDriverID();
+     const bool needs_shared_mem_clamp =
+         driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
+diff --git a/src/video_core/renderer_vulkan/vk_pipeline_cache.h b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
+index 3677c71ade..4572510960 100644
+--- a/src/video_core/renderer_vulkan/vk_pipeline_cache.h
++++ b/src/video_core/renderer_vulkan/vk_pipeline_cache.h
+@@ -173,6 +173,8 @@ private:
+     VideoCore::ShaderNotify& shader_notify;
+     bool use_asynchronous_shaders{};
+     bool use_vulkan_pipeline_cache{};
++    bool oot_visual_workaround{};
++    u64 visual_workaround_title{};
+ 
+     GraphicsPipelineCacheKey graphics_key{};
+     GraphicsPipeline* current_pipeline{};
+diff --git a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+index a0843633fb..442aa3dbfc 100644
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+@@ -756,12 +756,18 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
+         }
+ 
+         if (mesh_draw) {
+-            scheduler.Record([groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
++            scheduler.Record([this, groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
++                if (scheduler.GraphicsPipelineMissing()) {
++                    return;
++                }
+                 cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
+             });
+             return;
+         }
+         scheduler.Record([this, draw_params, hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
++            if (scheduler.GraphicsPipelineMissing()) {
++                return;
++            }
+             scheduler.TraceGpuWork(
+                 cmdbuf, hashes.first, hashes.second,
+                 {draw_params.num_vertices, draw_params.num_instances, 0}, [&] {
+@@ -821,8 +827,11 @@ void RasterizerVulkan::DrawIndirect() {
+         const auto& buffer = indirect_buffer.first;
+         const auto& offset = indirect_buffer.second;
+         if (params.is_byte_count) {
+-            scheduler.Record([buffer_obj = buffer->Handle(), offset,
++            scheduler.Record([this, buffer_obj = buffer->Handle(), offset,
+                               stride = params.stride](vk::CommandBuffer cmdbuf) {
++                if (scheduler.GraphicsPipelineMissing()) {
++                    return;
++                }
+                 cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
+                                                 static_cast<u32>(stride));
+             });
+@@ -832,9 +841,12 @@ void RasterizerVulkan::DrawIndirect() {
+             const auto count = buffer_cache.GetDrawIndirectCount();
+             const auto& draw_buffer = count.first;
+             const auto& offset_base = count.second;
+-            scheduler.Record([draw_buffer_obj = draw_buffer->Handle(),
++            scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(),
+                               buffer_obj = buffer->Handle(), offset_base, offset,
+                               params](vk::CommandBuffer cmdbuf) {
++                if (scheduler.GraphicsPipelineMissing()) {
++                    return;
++                }
+                 if (params.is_indexed) {
+                     cmdbuf.DrawIndexedIndirectCount(
+                         buffer_obj, offset, draw_buffer_obj, offset_base,
+@@ -849,6 +861,9 @@ void RasterizerVulkan::DrawIndirect() {
+         }
+         scheduler.Record([this, buffer_obj = buffer->Handle(), offset, params,
+                           hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
++            if (scheduler.GraphicsPipelineMissing()) {
++                return;
++            }
+             scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {}, [&] {
+                 if (params.is_indexed) {
+                     cmdbuf.DrawIndexedIndirect(buffer_obj, offset,
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.h b/src/video_core/renderer_vulkan/vk_scheduler.h
+index 1c73654a8e..c853c00b16 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.h
++++ b/src/video_core/renderer_vulkan/vk_scheduler.h
+@@ -142,6 +142,15 @@ public:
+     /// Update the pipeline to the current execution context.
+     bool UpdateGraphicsPipeline(GraphicsPipeline* pipeline);
+ 
++    /// Worker thread only: whether the bound graphics pipeline failed to build, so the draws
++    /// recorded after it must be dropped instead of reaching the driver without a pipeline.
++    void SetGraphicsPipelineMissing(bool missing) {
++        graphics_pipeline_missing = missing;
++    }
++    [[nodiscard]] bool GraphicsPipelineMissing() const {
++        return graphics_pipeline_missing;
++    }
++
+     /// Update the rescaling state. Returns true if the state has to be updated.
+     bool UpdateRescaling(bool is_rescaling, bool mesh_layout);
+ 
+@@ -427,6 +436,7 @@ private:
+     std::unique_ptr<MasterSemaphore> master_semaphore;
+     bool fragment_barrier_pending{};
+     bool render_pass_has_stores{};
++    bool graphics_pipeline_missing{};
+     std::unique_ptr<CommandPool> command_pool;
+ 
+     vk::QueryPool trace_query_pool;

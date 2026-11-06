@@ -1,0 +1,213 @@
+diff --git a/src/shader_recompiler/backend/spirv/emit_spirv.h b/src/shader_recompiler/backend/spirv/emit_spirv.h
+index c88f07c9ce..fa54516b92 100644
+--- a/src/shader_recompiler/backend/spirv/emit_spirv.h
++++ b/src/shader_recompiler/backend/spirv/emit_spirv.h
+@@ -6,6 +6,7 @@
+ 
+ #pragma once
+ 
++#include <cstdlib>
+ #include <vector>
+ 
+ #include "common/common_types.h"
+@@ -33,6 +34,21 @@ constexpr u32 RESCALING_LAYOUT_WORDS_OFFSET = offsetof(RescalingLayout, rescalin
+ constexpr u32 RESCALING_LAYOUT_DOWN_FACTOR_OFFSET = offsetof(RescalingLayout, down_factor);
+ constexpr u32 RENDERAREA_LAYOUT_OFFSET = offsetof(RenderAreaLayout, render_area);
+ 
++// EDEN_NX2_MESH_FIRST=1: the draw's first vertex is the first task (or mesh, without a task)
++// workgroup index, as in NVN and GL_NV_mesh_shader. Only the first active stage reads non-zero.
++struct MeshDrawBaseLayout {
++    u32 task;
++    u32 mesh;
++};
++constexpr u32 MESH_DRAW_BASE_OFFSET = sizeof(RescalingLayout);
++static_assert(MESH_DRAW_BASE_OFFSET + sizeof(MeshDrawBaseLayout) <=
++              sizeof(RescalingLayout) + sizeof(RenderAreaLayout));
++
++inline bool MeshFirstEnabled() {
++    static const bool enabled{std::getenv("EDEN_NX2_MESH_FIRST") != nullptr};
++    return enabled;
++}
++
+ [[nodiscard]] std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings);
+ [[nodiscard]] inline std::vector<u32> EmitSPIRV(const Profile& profile, IR::Program& program) {
+     Bindings binding;
+diff --git a/src/shader_recompiler/backend/spirv/emit_spirv_mesh.cpp b/src/shader_recompiler/backend/spirv/emit_spirv_mesh.cpp
+index 6c599528cc..8cf5485847 100644
+--- a/src/shader_recompiler/backend/spirv/emit_spirv_mesh.cpp
++++ b/src/shader_recompiler/backend/spirv/emit_spirv_mesh.cpp
+@@ -169,8 +169,14 @@ void MeshEpilogue(EmitContext& ctx) {
+ } // Anonymous namespace
+ 
+ Id EmitIsbeRead(EmitContext& ctx, Id address) {
+-    const Id workgroup{
++    Id workgroup{
+         ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0U)};
++    if (Sirit::ValidId(ctx.mesh_draw_base_push_constant)) {
++        const Id pointer_type{ctx.TypePointer(spv::StorageClass::PushConstant, ctx.U32[1])};
++        const Id pointer{ctx.OpAccessChain(pointer_type, ctx.mesh_draw_base_push_constant,
++                                           ctx.Const(ctx.mesh_draw_base_member_index))};
++        workgroup = ctx.OpIAdd(ctx.U32[1], workgroup, ctx.OpLoad(ctx.U32[1], pointer));
++    }
+     if (ctx.stage == Stage::Task) {
+         return workgroup; // the input region holds the workgroup index (VERTEX_ID)
+     }
+diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+index aee59ab4c5..5d8fa0eaff 100644
+--- a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
++++ b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+@@ -502,6 +502,7 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
+     DefineGlobalMemoryFunctions(program);
+     DefineRescalingInput(program.info);
+     DefineRenderArea(program.info);
++    DefineMeshDrawBase();
+ }
+ 
+ EmitContext::~EmitContext() = default;
+@@ -1153,7 +1154,7 @@ void EmitContext::DefineRescalingInput(const Info& info) {
+ }
+ 
+ void EmitContext::DefineRescalingInputPushConstant() {
+-    boost::container::static_vector<Id, 3> members{};
++    boost::container::static_vector<Id, 4> members{};
+     u32 member_index{0};
+ 
+     rescaling_textures_type = TypeArray(U32[1], Const(4u));
+@@ -1170,9 +1171,18 @@ void EmitContext::DefineRescalingInputPushConstant() {
+         members.push_back(F32[1]);
+         rescaling_downfactor_member_index = member_index++;
+     }
++    if (UsesMeshDrawBase()) {
++        members.push_back(U32[1]);
++        mesh_draw_base_member_index = member_index++;
++    }
+     const Id push_constant_struct{TypeStruct(std::span(members.data(), members.size()))};
+     Decorate(push_constant_struct, spv::Decoration::Block);
+     Name(push_constant_struct, "ResolutionInfo");
++    if (UsesMeshDrawBase()) {
++        MemberDecorate(push_constant_struct, mesh_draw_base_member_index, spv::Decoration::Offset,
++                       MeshDrawBaseOffset());
++        MemberName(push_constant_struct, mesh_draw_base_member_index, "mesh_draw_base");
++    }
+ 
+     MemberDecorate(push_constant_struct, rescaling_textures_member_index, spv::Decoration::Offset,
+                    static_cast<u32>(offsetof(RescalingLayout, rescaling_textures)));
+@@ -1191,6 +1201,9 @@ void EmitContext::DefineRescalingInputPushConstant() {
+     const Id pointer_type{TypePointer(spv::StorageClass::PushConstant, push_constant_struct)};
+     rescaling_push_constants = AddGlobalVariable(pointer_type, spv::StorageClass::PushConstant);
+     Name(rescaling_push_constants, "rescaling_push_constants");
++    if (UsesMeshDrawBase()) {
++        mesh_draw_base_push_constant = rescaling_push_constants;
++    }
+ 
+     if (profile.supported_spirv >= 0x00010400) {
+         interfaces.push_back(rescaling_push_constants);
+@@ -1208,6 +1221,36 @@ void EmitContext::DefineRescalingInputUniformConstant() {
+     }
+ }
+ 
++bool EmitContext::UsesMeshDrawBase() const {
++    return (stage == Stage::Task || stage == Stage::Mesh) && profile.unified_descriptor_binding &&
++           MeshFirstEnabled();
++}
++
++u32 EmitContext::MeshDrawBaseOffset() const {
++    return MESH_DRAW_BASE_OFFSET + static_cast<u32>(stage == Stage::Task
++                                                        ? offsetof(MeshDrawBaseLayout, task)
++                                                        : offsetof(MeshDrawBaseLayout, mesh));
++}
++
++void EmitContext::DefineMeshDrawBase() {
++    // One push constant block per entry point: the rescaling block already holds it if defined.
++    if (!UsesMeshDrawBase() || Sirit::ValidId(mesh_draw_base_push_constant)) {
++        return;
++    }
++    const Id push_constant_struct{TypeStruct(U32[1])};
++    Decorate(push_constant_struct, spv::Decoration::Block);
++    Name(push_constant_struct, "MeshDrawBase");
++    MemberDecorate(push_constant_struct, 0, spv::Decoration::Offset, MeshDrawBaseOffset());
++    MemberName(push_constant_struct, 0, "mesh_draw_base");
++    mesh_draw_base_member_index = 0;
++    const Id pointer_type{TypePointer(spv::StorageClass::PushConstant, push_constant_struct)};
++    mesh_draw_base_push_constant = AddGlobalVariable(pointer_type, spv::StorageClass::PushConstant);
++    Name(mesh_draw_base_push_constant, "mesh_draw_base_push_constants");
++    if (profile.supported_spirv >= 0x00010400) {
++        interfaces.push_back(mesh_draw_base_push_constant);
++    }
++}
++
+ void EmitContext::DefineRenderArea(const Info& info) {
+     if (!info.uses_render_area) {
+         return;
+diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.h b/src/shader_recompiler/backend/spirv/spirv_emit_context.h
+index 37b3f1c851..4dd5fafc15 100644
+--- a/src/shader_recompiler/backend/spirv/spirv_emit_context.h
++++ b/src/shader_recompiler/backend/spirv/spirv_emit_context.h
+@@ -311,6 +311,9 @@ public:
+     Id render_area_push_constant{};
+     u32 render_are_member_index{};
+ 
++    Id mesh_draw_base_push_constant{};
++    u32 mesh_draw_base_member_index{};
++
+     Id local_memory{};
+ 
+     bool uses_explicit_workgroup_layout{};
+@@ -431,6 +434,9 @@ private:
+     void DefineRescalingInputPushConstant();
+     void DefineRescalingInputUniformConstant();
+     void DefineRenderArea(const Info& info);
++    void DefineMeshDrawBase();
++    [[nodiscard]] bool UsesMeshDrawBase() const;
++    [[nodiscard]] u32 MeshDrawBaseOffset() const;
+ 
+     void DefineInputs(const IR::Program& program);
+     void DefineOutputs(const IR::Program& program);
+diff --git a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+index 5099898114..11afdf6a41 100644
+--- a/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
++++ b/src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
+@@ -47,6 +47,9 @@ namespace {
+ using boost::container::small_vector;
+ using boost::container::static_vector;
+ using Shader::ImageBufferDescriptor;
++using Shader::Backend::SPIRV::MESH_DRAW_BASE_OFFSET;
++using Shader::Backend::SPIRV::MeshDrawBaseLayout;
++using Shader::Backend::SPIRV::MeshFirstEnabled;
+ using Shader::Backend::SPIRV::RENDERAREA_LAYOUT_OFFSET;
+ using Shader::Backend::SPIRV::RESCALING_LAYOUT_DOWN_FACTOR_OFFSET;
+ using Shader::Backend::SPIRV::RESCALING_LAYOUT_WORDS_OFFSET;
+@@ -749,6 +752,12 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+     const bool is_rescaling{texture_cache.IsRescaling()};
+     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
+     const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
++    const bool push_mesh_draw_base{IsMeshPipeline() && MeshFirstEnabled()};
++    MeshDrawBaseLayout mesh_draw_base{};
++    if (push_mesh_draw_base) {
++        const u32 first{maxwell3d->draw_manager.draw_state.vertex_buffer.first};
++        (stage_infos[0].is_task ? mesh_draw_base.task : mesh_draw_base.mesh) = first;
++    }
+     const bool bind_descriptor_buffer{
+         descriptor_set_layout && uses_descriptor_buffer &&
+         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
+@@ -775,7 +784,8 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
+                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
+                       uses_render_area = render_area.uses_render_area,
+-                      render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
++                      render_area_data = render_area.words, push_mesh_draw_base,
++                      mesh_draw_base](vk::CommandBuffer cmdbuf) {
+         if (bind_descriptor_buffer) {
+             const VkDescriptorBufferBindingInfoEXT binding_info{
+                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
+@@ -805,6 +815,10 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
+             cmdbuf.PushConstants(*pipeline_layout, push_stages, RENDERAREA_LAYOUT_OFFSET,
+                                  sizeof(render_area_data), &render_area_data);
+         }
++        if (push_mesh_draw_base) {
++            cmdbuf.PushConstants(*pipeline_layout, push_stages, MESH_DRAW_BASE_OFFSET,
++                                 sizeof(mesh_draw_base), &mesh_draw_base);
++        }
+         if (!descriptor_set_layout) {
+             return;
+         }

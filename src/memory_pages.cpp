@@ -18,6 +18,7 @@
 #include <time.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <lz4.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>

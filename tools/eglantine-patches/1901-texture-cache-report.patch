@@ -1,0 +1,49 @@
+--- a/src/video_core/texture_cache/texture_cache.h
++++ b/src/video_core/texture_cache/texture_cache.h
+@@ -385,9 +385,17 @@
+     }
+     // Every 600 frames: device memory in use against the collector's thresholds.
+     // Skip expensive heap allocation, map construction, and sorting unless debug logging is explicitly enabled.
+-    static const bool log_tc = std::getenv("EDEN_NX2_TC_LOG") != nullptr;
++    // EDEN_NX2_TC_LOG=<frames>: how often (600 when not a number). The lists of the largest
++    // images and of memory by format print at Info: HW.GPU Debug slowed the PS5 to a stop.
++    static const u64 log_every = [] {
++        const char* value = std::getenv("EDEN_NX2_TC_LOG");
++        if (value == nullptr) return u64{0};
++        const u64 n = std::strtoull(value, nullptr, 10);
++        return n != 0 ? n : u64{600};
++    }();
++    const bool log_tc = log_every != 0;
+     static u64 frames{};
+-    if (log_tc && ++frames % 600 == 0) {
++    if (log_tc && ++frames % log_every == 0) {
+         u64 image_bytes{};
+         size_t images{};
+         std::vector<std::pair<u64, const Image*>> largest;
+@@ -396,7 +404,7 @@
+             const u64 bytes = ImageMemoryBytes(*image);
+             image_bytes += bytes;
+             ++images;
+-            if (debug_stats) {
++            {
+                 largest.emplace_back(bytes, image);
+                 auto& format = by_format[static_cast<u32>(image->info.format)];
+                 format.first += bytes;
+@@ -410,7 +418,7 @@
+                           largest.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+         for (size_t i = 0; i < std::min<size_t>(12, largest.size()); ++i) {
+             const Image& image = *largest[i].second;
+-            LOG_DEBUG(HW_GPU, "  {} MiB: {:#x} {}x{}x{} layers {} levels {} format {} type {} flags {:#x}",
++            LOG_INFO(HW_GPU, "  {} MiB: {:#x} {}x{}x{} layers {} levels {} format {} type {} flags {:#x}",
+                      largest[i].first >> 20, image.gpu_addr, image.info.size.width, image.info.size.height,
+                      image.info.size.depth, image.info.resources.layers, image.info.resources.levels,
+                      static_cast<u32>(image.info.format), static_cast<u32>(image.info.type),
+@@ -420,7 +428,7 @@
+         for (const auto& [format, total] : by_format) formats.emplace_back(total.first, format);
+         std::sort(formats.rbegin(), formats.rend());
+         for (size_t i = 0; i < std::min<size_t>(8, formats.size()); ++i) {
+-            LOG_DEBUG(HW_GPU, "  format {}: {} MiB in {} images", formats[i].second, formats[i].first >> 20,
++            LOG_INFO(HW_GPU, "  format {}: {} MiB in {} images", formats[i].second, formats[i].first >> 20,
+                      by_format[formats[i].second].second);
+         }
+         if constexpr (requires { runtime.LogMemoryStatistics(); }) {

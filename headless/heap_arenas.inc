@@ -61,7 +61,15 @@
 #include <stdio.h>
 #include <string.h>
 
-#define EDEN_HEAP_ARENA_SHIFT 23u /* 8 MiB arenas and slots */
+/* 2 MiB arenas and slots. They were 8 MiB: every growth of Ocarina of Time's heap was a new arena
+ * (an 8 MiB block aligned to 8 MiB, asked for as 16 MiB) that the pieces' scattered free memory
+ * could not hold, so the heap took 15 pieces (1.9 GiB) by the opening movie and 2.2 GiB in the
+ * first scene with ~1.1 GiB of them unused, and graphics ran out of the pool the CPU shares
+ * (EDEN_HEAP_GROW, EDEN_HEAP_SPACES). A 2 MiB arena fits where an 8 MiB one did not, and a
+ * thread that allocates little holds 2 MiB, not 8. The limits below cap them (32 first arenas, 16 a
+ * thread = 32 MiB, 256 in all = 512 MiB): with 128 a thread allowed, a scene change opened 200 nearly
+ * empty arenas in a minute (heap in use flat at 1.4 GiB) and the heap could not grow (bad_alloc). */
+#define EDEN_HEAP_ARENA_SHIFT 21u
 #define EDEN_HEAP_ARENA_SIZE (1u << EDEN_HEAP_ARENA_SHIFT)
 /* Absolute 8 MiB slots covering the heap (+1: the base need not be slot aligned). */
 #define EDEN_HEAP_SLOTS ((PS5_OPENGL_HEAP_SIZE >> EDEN_HEAP_ARENA_SHIFT) + 1u)
@@ -72,7 +80,7 @@
  * uses it), so this is also the most the heap keeps for small blocks alone. */
 #define EDEN_HEAP_MAX_ARENAS 256u
 /* One thread's arenas: at most 256 MiB of small blocks before they go to the heap's spaces. */
-#define EDEN_HEAP_THREAD_ARENAS 32u
+#define EDEN_HEAP_THREAD_ARENAS 16u
 /* A request this large or larger that finds no room in the thread's arenas makes no new one. */
 #define EDEN_HEAP_ARENA_GROW_REQUEST (64u * 1024u)
 /* After a thread found all its arenas full and could make no other, the requests it makes before
@@ -84,6 +92,8 @@
 #define EDEN_HEAP_PIECE_SHIFT 27u /* 128 MiB */
 #define EDEN_HEAP_PIECE_SIZE ((size_t)1 << EDEN_HEAP_PIECE_SHIFT)
 #define EDEN_HEAP_PIECES (PS5_OPENGL_HEAP_SIZE >> EDEN_HEAP_PIECE_SHIFT)
+/* Pieces stop below the arenas' region at the top of the range (eden_heap_arena_block). */
+#define EDEN_HEAP_GROW_PIECES (EDEN_HEAP_PIECES - (((size_t)EDEN_HEAP_MAX_ARENAS << EDEN_HEAP_ARENA_SHIFT) >> EDEN_HEAP_PIECE_SHIFT) - 1)
 
 void *eden_heap_reserve(size_t size);             /* address space only; NULL when refused */
 int eden_heap_commit(void *address, size_t size); /* zeroed memory for a part of it; 0 when done */
@@ -285,6 +295,23 @@ static void eden_heap_thread_exit(void *value) {
 
 unsigned eden_heap_arenas_created(void) {
   return atomic_load_explicit(&eden_heap_arena_count, memory_order_relaxed);
+}
+
+/* One stderr line: the arenas made (8 MiB each, kept for good) and every space's pieces and the
+ * blocks taken from it and not freed (an arena counts as one). Where the heap holds memory its
+ * blocks do not use: Ocarina of Time's heap held 2.9 GiB of pieces with 1.3 GiB in use when
+ * graphics ran out of memory. */
+void eden_heap_spaces_report(void) {
+  char line[1536];
+  const unsigned count = atomic_load_explicit(&eden_heap_space_count, memory_order_acquire);
+  const unsigned arenas = atomic_load_explicit(&eden_heap_arena_count, memory_order_relaxed);
+  int at = snprintf(line, sizeof(line), "EDEN_HEAP_SPACES arenas=%u (%u MiB) spaces=%u slot:pieces/blocks", arenas,
+                    arenas * (EDEN_HEAP_ARENA_SIZE >> 20), count);
+  for (unsigned i = 0; i < count && at > 0 && at < (int)sizeof(line) - 32; ++i)
+    if (eden_heap_space_span[i] != 0)
+      at += snprintf(line + at, sizeof(line) - (size_t)at, " %u:%u/%ld", i, eden_heap_space_span[i],
+                     (long)atomic_load_explicit(&eden_heap_space_blocks[i], memory_order_relaxed));
+  fprintf(stderr, "%s\n", line);
 }
 
 /* Memory the heap's pieces hold now (pieces given back are not counted). */
@@ -551,6 +578,14 @@ static void eden_heap_grow_acquire(void) {
  * `seen` is the growth the caller tried after: when another thread grew the heap meanwhile, that
  * space is tried first. Returns 0 when the heap is at its limit or the console has no memory left. */
 static int eden_heap_grow(size_t bytes, unsigned seen) {
+  { /* before the grow lock: printing may allocate */
+    /* What makes the heap grow: the request no space had room for (an arena is 8 MiB). */
+    static atomic_uint grow_reports;
+    if (atomic_fetch_add_explicit(&grow_reports, 1, memory_order_relaxed) < 400)
+      fprintf(stderr, "EDEN_HEAP_GROW request=%zu arenas=%u pieces=%u\n", bytes,
+              atomic_load_explicit(&eden_heap_arena_count, memory_order_relaxed),
+              atomic_load_explicit(&eden_heap_pieces_used, memory_order_relaxed));
+  }
   eden_heap_grow_acquire();
   int grown = 0;
   atomic_store_explicit(&eden_heap_grow_why, EDEN_HEAP_WHY_NONE, memory_order_relaxed);
@@ -580,7 +615,7 @@ static int eden_heap_grow(size_t bytes, unsigned seen) {
   if (atomic_load_explicit(&eden_heap_space_generation, memory_order_relaxed) != seen) {
     grown = 1;
   } else if (eden_heap_grows && need > bytes && slot < EDEN_HEAP_PIECES &&
-             (first < used || pieces <= EDEN_HEAP_PIECES - used)) {
+             (first < used || pieces <= EDEN_HEAP_GROW_PIECES - used)) {
     void *start = (char *)ps5_heap_base + ((size_t)first << EDEN_HEAP_PIECE_SHIFT);
     const size_t size = pieces << EDEN_HEAP_PIECE_SHIFT;
     if (eden_heap_commit(start, size) == 0) {
@@ -711,12 +746,31 @@ static void *eden_heap_main(int kind, size_t a, size_t b) {
 
 /* Allocate and register one arena block from the heap (NULL on failure, or at the limit: of first
  * arenas for a thread's first, of all arenas for another). */
+/* Arenas live at the top of the heap's range, a slot each, committed when made. Taken from the
+ * spaces, each needed an aligned run that their scattered free memory rarely had: every growth of
+ * Ocarina of Time's heap was an arena (EDEN_HEAP_GROW), and the pieces held ~1 GiB more than their
+ * blocks used. Pieces grow from the bottom and stop below this region (EDEN_HEAP_GROW_PIECES). */
+#define EDEN_HEAP_ARENA_REGION ((size_t)EDEN_HEAP_MAX_ARENAS << EDEN_HEAP_ARENA_SHIFT)
+static void *eden_heap_arena_block(unsigned index) {
+  if (!eden_heap_grows || eden_heap_range_size < 4 * EDEN_HEAP_ARENA_REGION || index >= EDEN_HEAP_MAX_ARENAS)
+    return NULL;
+  char *const top = (char *)ps5_heap_base + eden_heap_range_size;
+  void *const block = top - ((size_t)(index + 1) << EDEN_HEAP_ARENA_SHIFT);
+  if (eden_heap_commit(block, EDEN_HEAP_ARENA_SIZE) != 0)
+    return NULL;
+  atomic_fetch_add_explicit(&eden_heap_committed_bytes, EDEN_HEAP_ARENA_SIZE, memory_order_relaxed);
+  return block;
+}
+
 static void *eden_heap_create_arena(int first) {
   eden_heap_create_acquire();
   void *arena = NULL;
   const unsigned count = atomic_load_explicit(&eden_heap_arena_count, memory_order_relaxed);
   if (count < EDEN_HEAP_MAX_ARENAS && (!first || eden_heap_first_arenas < EDEN_HEAP_FIRST_ARENAS)) {
-    void *block = eden_heap_main(EDEN_HEAP_ALIGNED, EDEN_HEAP_ARENA_SIZE, EDEN_HEAP_ARENA_SIZE);
+    void *block = eden_heap_arena_block(count);
+    const int own_region = block != NULL;
+    if (block == NULL)
+      block = eden_heap_main(EDEN_HEAP_ALIGNED, EDEN_HEAP_ARENA_SIZE, EDEN_HEAP_ARENA_SIZE);
     if (block != NULL) {
       arena = sceLibcMspaceCreate("Eden-arena", block, EDEN_HEAP_ARENA_SIZE, 0);
       if (arena != NULL) {
@@ -726,7 +780,7 @@ static void *eden_heap_create_arena(int first) {
         atomic_store_explicit(&eden_heap_arena_count, count + 1, memory_order_release);
         if (first)
           eden_heap_first_arenas++;
-      } else {
+      } else if (!own_region) {
         eden_heap_space_free(block);
       }
     }

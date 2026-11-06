@@ -1,0 +1,13 @@
+--- a/src/video_core/host1x/ffmpeg.cpp
++++ b/src/video_core/host1x/ffmpeg.cpp
+@@ -283,6 +283,10 @@
+     m_codec_context = avcodec_alloc_context3(m_decoder.GetCodec());
+     av_opt_set(m_codec_context->priv_data, "tune", "zerolatency", 0);
+     m_codec_context->thread_count = 0;
++    // dav1d takes its thread count from here, and the automatic count can be 1 on the PS5.
++    if (m_codec_context->codec_id == AV_CODEC_ID_AV1) {
++        m_codec_context->thread_count = 4;
++    }
+     m_codec_context->thread_type &= ~FF_THREAD_FRAME;
+ #if defined(__ANDROID__)
+     m_codec_context->flags |= AV_CODEC_FLAG_LOW_DELAY;

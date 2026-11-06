@@ -1,0 +1,901 @@
+diff --git a/src/shader_recompiler/backend/glasm/emit_glasm_instructions.h b/src/shader_recompiler/backend/glasm/emit_glasm_instructions.h
+index ecac5806e9..202960aa43 100644
+--- a/src/shader_recompiler/backend/glasm/emit_glasm_instructions.h
++++ b/src/shader_recompiler/backend/glasm/emit_glasm_instructions.h
+@@ -408,6 +408,7 @@ void EmitStorageAtomicXor32(EmitContext& ctx, IR::Inst& inst, const IR::Value& b
+                             ScalarU32 offset, ScalarU32 value);
+ void EmitStorageAtomicExchange32(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+                                  ScalarU32 offset, ScalarU32 value);
++void EmitStorageAtomicCompareExchange32(EmitContext& ctx);
+ void EmitStorageAtomicIAdd64(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+                              ScalarU32 offset, Register value);
+ void EmitStorageAtomicSMin64(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+@@ -469,6 +470,7 @@ void EmitGlobalAtomicAnd32(EmitContext& ctx);
+ void EmitGlobalAtomicOr32(EmitContext& ctx);
+ void EmitGlobalAtomicXor32(EmitContext& ctx);
+ void EmitGlobalAtomicExchange32(EmitContext& ctx);
++void EmitGlobalAtomicCompareExchange32(EmitContext& ctx);
+ void EmitGlobalAtomicIAdd64(EmitContext& ctx);
+ void EmitGlobalAtomicSMin64(EmitContext& ctx);
+ void EmitGlobalAtomicUMin64(EmitContext& ctx);
+diff --git a/src/shader_recompiler/backend/glasm/emit_glasm_memory.cpp b/src/shader_recompiler/backend/glasm/emit_glasm_memory.cpp
+index decb3dda2b..c81e9cb8dc 100644
+--- a/src/shader_recompiler/backend/glasm/emit_glasm_memory.cpp
++++ b/src/shader_recompiler/backend/glasm/emit_glasm_memory.cpp
+@@ -561,6 +561,14 @@ void EmitGlobalAtomicExchange32(EmitContext&) {
+     throw NotImplementedException("GLASM instruction");
+ }
+ 
++void EmitGlobalAtomicCompareExchange32(EmitContext&) {
++    throw NotImplementedException("GLASM instruction");
++}
++
++void EmitStorageAtomicCompareExchange32(EmitContext&) {
++    throw NotImplementedException("GLASM instruction");
++}
++
+ void EmitGlobalAtomicIAdd64(EmitContext&) {
+     throw NotImplementedException("GLASM instruction");
+ }
+diff --git a/src/shader_recompiler/backend/glsl/emit_glsl_atomic.cpp b/src/shader_recompiler/backend/glsl/emit_glsl_atomic.cpp
+index 376a058277..14acc7b2a3 100644
+--- a/src/shader_recompiler/backend/glsl/emit_glsl_atomic.cpp
++++ b/src/shader_recompiler/backend/glsl/emit_glsl_atomic.cpp
+@@ -175,6 +175,14 @@ void EmitStorageAtomicExchange32(EmitContext& ctx, IR::Inst& inst, const IR::Val
+                ctx.var_alloc.Consume(offset), value);
+ }
+ 
++/// Stores value if the storage word equals comparator; returns the old word.
++void EmitStorageAtomicCompareExchange32(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
++                                        const IR::Value& offset, std::string_view comparator,
++                                        std::string_view value) {
++    ctx.AddU32("{}=atomicCompSwap({}_ssbo{}[{}>>2],{},{});", inst, ctx.stage_name, binding.U32(),
++               ctx.var_alloc.Consume(offset), comparator, value);
++}
++
+ void EmitStorageAtomicIAdd64(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+                              const IR::Value& offset, std::string_view value) {
+     LOG_WARNING(Shader_GLSL, "Int64 atomics not supported, fallback to non-atomic");
+@@ -441,6 +449,10 @@ void EmitGlobalAtomicExchange32(EmitContext&) {
+     throw NotImplementedException("GLSL Instruction");
+ }
+ 
++void EmitGlobalAtomicCompareExchange32(EmitContext&) {
++    throw NotImplementedException("GLSL Instruction");
++}
++
+ void EmitGlobalAtomicIAdd64(EmitContext&) {
+     throw NotImplementedException("GLSL Instruction");
+ }
+diff --git a/src/shader_recompiler/backend/glsl/emit_glsl_instructions.h b/src/shader_recompiler/backend/glsl/emit_glsl_instructions.h
+index 6295849107..f704b29b27 100644
+--- a/src/shader_recompiler/backend/glsl/emit_glsl_instructions.h
++++ b/src/shader_recompiler/backend/glsl/emit_glsl_instructions.h
+@@ -478,6 +478,9 @@ void EmitStorageAtomicXor32(EmitContext& ctx, IR::Inst& inst, const IR::Value& b
+                             const IR::Value& offset, std::string_view value);
+ void EmitStorageAtomicExchange32(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+                                  const IR::Value& offset, std::string_view value);
++void EmitStorageAtomicCompareExchange32(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
++                                        const IR::Value& offset, std::string_view comparator,
++                                        std::string_view value);
+ void EmitStorageAtomicIAdd64(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+                              const IR::Value& offset, std::string_view value);
+ void EmitStorageAtomicSMin64(EmitContext& ctx, IR::Inst& inst, const IR::Value& binding,
+@@ -539,6 +542,7 @@ void EmitGlobalAtomicAnd32(EmitContext& ctx);
+ void EmitGlobalAtomicOr32(EmitContext& ctx);
+ void EmitGlobalAtomicXor32(EmitContext& ctx);
+ void EmitGlobalAtomicExchange32(EmitContext& ctx);
++void EmitGlobalAtomicCompareExchange32(EmitContext& ctx);
+ void EmitGlobalAtomicIAdd64(EmitContext& ctx);
+ void EmitGlobalAtomicSMin64(EmitContext& ctx);
+ void EmitGlobalAtomicUMin64(EmitContext& ctx);
+diff --git a/src/shader_recompiler/backend/spirv/emit_spirv_atomic.cpp b/src/shader_recompiler/backend/spirv/emit_spirv_atomic.cpp
+index 4f0e63acfb..88e93f3b69 100644
+--- a/src/shader_recompiler/backend/spirv/emit_spirv_atomic.cpp
++++ b/src/shader_recompiler/backend/spirv/emit_spirv_atomic.cpp
+@@ -248,6 +248,16 @@ Id EmitStorageAtomicExchange32(EmitContext& ctx, const IR::Value& binding, const
+     return StorageAtomicU32(ctx, binding, offset, value, &Sirit::Module::OpAtomicExchange);
+ }
+ 
++/// Stores value if the storage word equals comparator; returns the old word.
++Id EmitStorageAtomicCompareExchange32(EmitContext& ctx, const IR::Value& binding,
++                                      const IR::Value& offset, Id comparator, Id value) {
++    const Id pointer{StoragePointer(ctx, ctx.storage_types.U32, &StorageDefinitions::U32, binding,
++                                    offset, sizeof(u32))};
++    const auto [scope, semantics]{AtomicArgs(ctx)};
++    return ctx.OpAtomicCompareExchange(ctx.U32[1], pointer, scope, semantics, semantics, value,
++                                       comparator);
++}
++
+ Id EmitStorageAtomicIAdd64(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
+                            Id value) {
+     return StorageAtomicU64(ctx, binding, offset, value, &Sirit::Module::OpAtomicIAdd,
+@@ -473,6 +483,19 @@ Id EmitGlobalAtomicExchange32(EmitContext&) {
+     throw NotImplementedException("SPIR-V Instruction");
+ }
+ 
++/// Global compare-exchange through the routing function; returns the old word.
++Id EmitGlobalAtomicCompareExchange32(EmitContext& ctx, const IR::Value& address, Id comparator,
++                                     Id value) {
++    if (!ctx.profile.support_int64) {
++        throw NotImplementedException("Global atomic addressing requires 64-bit integers");
++    }
++    if (!Sirit::ValidId(ctx.atomic_cas_global_func_u32)) {
++        throw NotImplementedException("Global atomic compare-exchange with no routable storage buffer");
++    }
++    return ctx.OpFunctionCall(ctx.U32[1], ctx.atomic_cas_global_func_u32, ctx.Def(address),
++                              comparator, value);
++}
++
+ Id EmitGlobalAtomicIAdd64(EmitContext&) {
+     throw NotImplementedException("SPIR-V Instruction");
+ }
+diff --git a/src/shader_recompiler/backend/spirv/emit_spirv_instructions.h b/src/shader_recompiler/backend/spirv/emit_spirv_instructions.h
+index 29f7c1c956..ce0ccf0b1c 100644
+--- a/src/shader_recompiler/backend/spirv/emit_spirv_instructions.h
++++ b/src/shader_recompiler/backend/spirv/emit_spirv_instructions.h
+@@ -373,6 +373,8 @@ Id EmitStorageAtomicXor32(EmitContext& ctx, const IR::Value& binding, const IR::
+                           Id value);
+ Id EmitStorageAtomicExchange32(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
+                                Id value);
++Id EmitStorageAtomicCompareExchange32(EmitContext& ctx, const IR::Value& binding,
++                                      const IR::Value& offset, Id comparator, Id value);
+ Id EmitStorageAtomicIAdd64(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
+                            Id value);
+ Id EmitStorageAtomicSMin64(EmitContext& ctx, const IR::Value& binding, const IR::Value& offset,
+@@ -434,6 +436,8 @@ Id EmitGlobalAtomicAnd32(EmitContext& ctx);
+ Id EmitGlobalAtomicOr32(EmitContext& ctx);
+ Id EmitGlobalAtomicXor32(EmitContext& ctx);
+ Id EmitGlobalAtomicExchange32(EmitContext& ctx);
++Id EmitGlobalAtomicCompareExchange32(EmitContext& ctx, const IR::Value& address, Id comparator,
++                                     Id value);
+ Id EmitGlobalAtomicIAdd64(EmitContext& ctx);
+ Id EmitGlobalAtomicSMin64(EmitContext& ctx);
+ Id EmitGlobalAtomicUMin64(EmitContext& ctx);
+diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+index 4c0d23fa99..aee59ab4c5 100644
+--- a/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
++++ b/src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
+@@ -954,6 +954,8 @@ void EmitContext::DefineWriteStorageCasLoopFunction(const Info& info) {
+     write_storage_cas_loop_func = func;
+ }
+ 
++/// Defines the functions that route global memory accesses and atomics to the storage buffer
++/// holding the address at run time.
+ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
+     const Info& info{program.info};
+     if (!info.uses_global_memory || !profile.support_int64) {
+@@ -1115,6 +1117,28 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
+         OpReturnValue(u32_zero_value);
+         OpFunctionEnd();
+     }
++    if (std::ranges::any_of(program.blocks, [](const IR::Block* block) {
++            return std::ranges::any_of(block->Instructions(), [](const IR::Inst& inst) {
++                return inst.GetOpcode() == IR::Opcode::GlobalAtomicCompareExchange32;
++            });
++        })) {
++        const Id function_type{TypeFunction(U32[1], U64, U32[1], U32[1])};
++        atomic_cas_global_func_u32 =
++            OpFunction(U32[1], spv::FunctionControlMask::MaskNone, function_type);
++        const Id address{OpFunctionParameter(U64)};
++        const Id comparator{OpFunctionParameter(U32[1])};
++        const Id value{OpFunctionParameter(U32[1])};
++        const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
++        define_body(&StorageDefinitions::U32, address, storage_types.U32.element, 2,
++                    [&](Id pointer) {
++                        OpReturnValue(OpAtomicCompareExchange(U32[1], pointer, scope,
++                                                              u32_zero_value, u32_zero_value,
++                                                              value, comparator));
++                    });
++        // No buffer matched: report success so a guest CAS retry loop cannot spin forever.
++        OpReturnValue(comparator);
++        OpFunctionEnd();
++    }
+ }
+ 
+ void EmitContext::DefineRescalingInput(const Info& info) {
+diff --git a/src/shader_recompiler/backend/spirv/spirv_emit_context.h b/src/shader_recompiler/backend/spirv/spirv_emit_context.h
+index f31aa89adb..37b3f1c851 100644
+--- a/src/shader_recompiler/backend/spirv/spirv_emit_context.h
++++ b/src/shader_recompiler/backend/spirv/spirv_emit_context.h
+@@ -347,6 +347,7 @@ public:
+     Id write_global_func_u32x4{};
+     Id atomic_add_global_func_u32{};
+     Id atomic_umax_global_func_u32{};
++    Id atomic_cas_global_func_u32{};
+ 
+     bool need_input_position_indirect{};
+     Id input_position{};
+diff --git a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
+index d5fd8e7114..f435ccfe54 100644
+--- a/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
++++ b/src/shader_recompiler/frontend/ampere/lower_to_maxwell.h
+@@ -115,7 +115,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+     control_entries[0] = true;
+     const auto write_count = [](const Instruction& instruction) -> std::optional<u32> {
+         switch (instruction.Bits(0, 12)) {
+-        case 0x202: case 0x802: case 0x424: case 0x724: case 0x824: case 0xe24: case 0x227:
++        case 0x202: case 0x802: case 0x803: case 0x424: case 0x724: case 0x824: case 0xe24: case 0x227:
+         case 0x810: case 0x819: case 0x845: case 0x906: case 0x820:
+         case 0x812: case 0x589:
+         case 0x212: case 0x207: case 0x807: case 0x208: case 0x808:
+@@ -1129,15 +1129,16 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+         case 0xab9: case 0xabb: { // ULDC, direct or indexed.
+             const u32 uniform_dest = insn.Bits(16, 8), index_reg = insn.Bits(24, 8);
+             const u32 width = insn.Bits(73, 3);
+-            const bool subword_load = opcode == 0xab9 && (width == 0 || width == 2);
++            const bool subword_load = width == 0 || width == 2;
+             const u32 offset = insn.Bits(38, 16);
+             const u32 alignment = width == 0 ? 1U : width == 2 ? 2U : 4U;
+             const u32 target = uniform_register(uniform_dest);
+             const u32 index_target = opcode == 0xabb ? uniform_register(index_reg) : 255U;
+             if (target == ~0U || target == 255 || (!subword_load && width != 4 && width != 5) ||
+-                (subword_load && offset >= 0x8000) ||
++                (opcode == 0xab9 && subword_load && offset >= 0x8000) ||
+                 (width == 5 && ((uniform_dest & 1) || uniform_register(uniform_dest + 1) != target + 1)) ||
+-                bank() >= 18 || offset % alignment || insn.Bits(62, 2) ||
++                // An index register can align the offset; the host reads the aligned word either way.
++                bank() >= 18 || (opcode == 0xab9 && offset % alignment) || insn.Bits(62, 2) ||
+                 (insn.words[2] & ~0xe00U) != (opcode == 0xab9 ? 0U : 0x08000000U) ||
+                 index_target == ~0U)
+                 return fail(index, "native uniform constant load mode");
+@@ -2103,9 +2104,35 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+         }
+ 
+         case 0x243:
+-            if (insn.Bits(24, 8) != 255 || (insn.words[1] & ~0xffU) ||
+-                insn.words[2] != 0x0000c4ffU)
++            // F2IP.U8.F32 Rd, Ra, Rb, RZ: Rb's byte in bits 0-7 and Ra's in bits 8-15. The default
++            // rounding (bits 78-79 clear) packs unorm values already scaled by 255.
++            if ((insn.words[1] & ~0xffU) ||
++                (insn.words[2] != 0x0000c4ffU && insn.words[2] != 0x000004ffU))
+                 return fail(index, "native packed float-to-byte mode");
++            if (insn.Bits(24, 8) != 255 || insn.words[2] == 0x000004ffU) {
++                const auto to_byte = [&](u32 source, u32 target) {
++                    emit(0x5800000000000000ULL | predicate | target | (u64{source} << 8) |
++                         (u64{source} << 20) | (u64{7} << 39) | (u64{7} << 48));
++                    emit(0x5c40000000000000ULL | predicate | target | (u64{source} << 8) |
++                         (u64{target} << 20) | (u64{7} << 48));
++                    mov_imm(252, 0);
++                    emit(0x5c60000000000000ULL | predicate | target | (u64{target} << 8) |
++                         (u64{252} << 20) | (u64{15} << 39));
++                    mov_imm(252, 0x437f0000U);
++                    emit(0x5c60000000000000ULL | predicate | target | (u64{target} << 8) |
++                         (u64{252} << 20) | (u64{7} << 39));
++                    emit(0x5cb0000000000000ULL | predicate | target | (u64{2} << 8) | (u64{2} << 10) |
++                         (u64{target} << 20) | (u64{insn.Bits(78, 2)} << 39));
++                };
++                to_byte(insn.Bits(32, 8), 250);
++                if (insn.Bits(24, 8) == 255) {
++                    emit(base(0x5c98000000000000ULL) | (u64{15} << 39) | (u64{250} << 20));
++                    break;
++                }
++                to_byte(insn.Bits(24, 8), 251);
++                emit(base(0x5c18000000000000ULL) | (u64{251} << 8) | (u64{250} << 20) | (u64{8} << 39));
++                break;
++            }
+             insn.words[0] &= 0x00ffffffU;
+             insn.words[2] = 0x0021e000U;
+             opcode = 0x305;
+@@ -3211,7 +3238,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+             }
+             // I2F.{U,S}8 Rd, Rs.B0-B3: the byte selector (bits 60-61) as Maxwell's (41-42).
+             if ((insn.words[2] & ~0x400U) != (opcode == 0xd06 ? 0x08001000U : 0x1000U) ||
+-                (insn.words[1] & (opcode == 0xd06 ? 0xffffff00U : 0xcfffff00U)) || source == ~0U)
++                (insn.words[1] & 0xcfffff00U) || source == ~0U)
+                 return fail(index, "native byte-to-float conversion mode");
+             emit(base(0x5cb8000000000000ULL) | (u64{2} << 8) | (is_signed << 13) | (u64{source} << 20) |
+                  (u64{insn.Bits(60, 2)} << 41));
+@@ -3455,7 +3482,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+             const u32 carry_out = insn.Bits(81, 3);
+             if (insn.Bits(72, 1) || insn.Bits(74, 1) || insn.Bits(80, 1) ||
+                 (carry_out != 7 && ((opcode != 0x811 && insn.Bits(63, 1)) ||
+-                                    (rewritten_uniform && (opcode != 0x211 || carry_out > 1)))) ||
++                                    (rewritten_uniform && opcode != 0x211))) ||
+                 ((opcode == 0x211 || opcode == 0xa11) && insn.Bits(62, 1)) || (opcode == 0xc11 && (insn.words[1] & ~0x8000003fU)))
+                 return fail(index, "native LEA carry/high mode");
+             // 0x211 bit 63 negates Rb (LEA Rd, Ra, -Rb, s), as Maxwell ISCADD's bit 48.
+@@ -3559,9 +3586,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32
+                 const bool carry_in = insn.Bits(74, 1) != 0;
+                 const u32 carry_out = insn.Bits(81, 3);
+                 const u32 a = insn.Bits(24, 8);
+-                if ((carry_in && carry_out != 7) || (opcode == 0x210 && (insn.words[1] & ~0xffU)) ||
+-                    (rewritten_uniform && carry_out != 7 && carry_out > 1) ||
+-                    (rewritten_uniform && carry_in && insn.Bits(87, 3) > 1 && insn.Bits(87, 3) != 7))
++                if ((carry_in && carry_out != 7) || (opcode == 0x210 && (insn.words[1] & ~0xffU)))
+                     return fail(index, "native integer carry mode");
+                 if (opcode == 0x810) {
+                     emit(0x1c00000000000000ULL | predicate | 250 | (u64{a} << 8) | (u64{insn.words[1]} << 20));
+diff --git a/src/shader_recompiler/frontend/ir/ir_emitter.cpp b/src/shader_recompiler/frontend/ir/ir_emitter.cpp
+index 218fbbbf76..fe3b5685ab 100644
+--- a/src/shader_recompiler/frontend/ir/ir_emitter.cpp
++++ b/src/shader_recompiler/frontend/ir/ir_emitter.cpp
+@@ -1558,6 +1558,12 @@ U32U64 IREmitter::GlobalAtomicExchange(const U64& pointer_offset, const U32U64&
+     }
+ }
+ 
++/// Stores value at the address if the word there equals comparator; returns the old word.
++U32 IREmitter::GlobalAtomicCompareExchange(const U64& pointer_offset, const U32& comparator,
++                                           const U32& value) {
++    return Inst<U32>(Opcode::GlobalAtomicCompareExchange32, pointer_offset, comparator, value);
++}
++
+ F32 IREmitter::GlobalAtomicF32Add(const U64& pointer_offset, const Value& value,
+                                   const FpControl control) {
+     return Inst<F32>(Opcode::GlobalAtomicAddF32, Flags{control}, pointer_offset, value);
+diff --git a/src/shader_recompiler/frontend/ir/ir_emitter.h b/src/shader_recompiler/frontend/ir/ir_emitter.h
+index e70430fb95..2f8967276c 100644
+--- a/src/shader_recompiler/frontend/ir/ir_emitter.h
++++ b/src/shader_recompiler/frontend/ir/ir_emitter.h
+@@ -290,6 +290,8 @@ public:
+     [[nodiscard]] U32U64 GlobalAtomicOr(const U64& pointer_offset, const U32U64& value);
+     [[nodiscard]] U32U64 GlobalAtomicXor(const U64& pointer_offset, const U32U64& value);
+     [[nodiscard]] U32U64 GlobalAtomicExchange(const U64& pointer_offset, const U32U64& value);
++    [[nodiscard]] U32 GlobalAtomicCompareExchange(const U64& pointer_offset, const U32& comparator,
++                                                  const U32& value);
+ 
+     [[nodiscard]] F32 GlobalAtomicF32Add(const U64& pointer_offset, const Value& value,
+                                          const FpControl control = {});
+diff --git a/src/shader_recompiler/frontend/ir/microinstruction.cpp b/src/shader_recompiler/frontend/ir/microinstruction.cpp
+index a579ed1057..0d10b28eb2 100644
+--- a/src/shader_recompiler/frontend/ir/microinstruction.cpp
++++ b/src/shader_recompiler/frontend/ir/microinstruction.cpp
+@@ -65,6 +65,7 @@ Inst::~Inst() {
+     }
+ }
+ 
++/// Returns true when the instruction must be kept even if its result is unused
+ bool Inst::MayHaveSideEffects() const noexcept {
+     switch (op) {
+     case Opcode::ConditionRef:
+@@ -132,6 +133,7 @@ bool Inst::MayHaveSideEffects() const noexcept {
+     case Opcode::GlobalAtomicOr32:
+     case Opcode::GlobalAtomicXor32:
+     case Opcode::GlobalAtomicExchange32:
++    case Opcode::GlobalAtomicCompareExchange32:
+     case Opcode::GlobalAtomicIAdd64:
+     case Opcode::GlobalAtomicSMin64:
+     case Opcode::GlobalAtomicUMin64:
+@@ -168,6 +170,7 @@ bool Inst::MayHaveSideEffects() const noexcept {
+     case Opcode::StorageAtomicOr32:
+     case Opcode::StorageAtomicXor32:
+     case Opcode::StorageAtomicExchange32:
++    case Opcode::StorageAtomicCompareExchange32:
+     case Opcode::StorageAtomicIAdd64:
+     case Opcode::StorageAtomicSMin64:
+     case Opcode::StorageAtomicUMin64:
+diff --git a/src/shader_recompiler/frontend/ir/opcodes.cpp b/src/shader_recompiler/frontend/ir/opcodes.cpp
+index cef68700b3..edefd61275 100644
+--- a/src/shader_recompiler/frontend/ir/opcodes.cpp
++++ b/src/shader_recompiler/frontend/ir/opcodes.cpp
+@@ -10,7 +10,7 @@ namespace Shader::IR {
+ 
+ namespace Detail {
+ 
+-OpcodeMeta META_TABLE[540] = {
++OpcodeMeta META_TABLE[NUM_OPCODES] = {
+ #define OPCODE(name_token, type_token, ...)                                                        \
+     {                                                                                              \
+         .name{#name_token},                                                                        \
+@@ -21,7 +21,7 @@ OpcodeMeta META_TABLE[540] = {
+ #undef OPCODE
+ };
+ 
+-u8 NUM_ARGS[540] = {
++u8 NUM_ARGS[NUM_OPCODES] = {
+ #define OPCODE(name_token, type_token, ...) u8(CalculateNumArgsOf(Opcode::name_token)),
+ #include "opcodes.inc"
+ #undef OPCODE
+diff --git a/src/shader_recompiler/frontend/ir/opcodes.h b/src/shader_recompiler/frontend/ir/opcodes.h
+index 85e7d824d0..c9a081cdd5 100644
+--- a/src/shader_recompiler/frontend/ir/opcodes.h
++++ b/src/shader_recompiler/frontend/ir/opcodes.h
+@@ -22,6 +22,12 @@ enum class Opcode {
+ #undef OPCODE
+ };
+ 
++inline constexpr size_t NUM_OPCODES = 0
++#define OPCODE(...) +1
++#include "opcodes.inc"
++#undef OPCODE
++    ;
++
+ namespace Detail {
+ struct OpcodeMeta {
+     std::string_view name;
+@@ -57,12 +63,12 @@ static constexpr Type F64x2{Type::F64x2};
+ static constexpr Type F64x3{Type::F64x3};
+ static constexpr Type F64x4{Type::F64x4};
+ 
+-extern OpcodeMeta META_TABLE[540];
++extern OpcodeMeta META_TABLE[NUM_OPCODES];
+ constexpr size_t CalculateNumArgsOf(Opcode op) noexcept {
+     const auto& arg_types = META_TABLE[size_t(op)].arg_types;
+     return size_t(std::distance(arg_types.begin(), std::ranges::find(arg_types, Type::Void)));
+ }
+-extern u8 NUM_ARGS[540];
++extern u8 NUM_ARGS[NUM_OPCODES];
+ } // namespace Detail
+ 
+ /// Get return type of an opcode
+diff --git a/src/shader_recompiler/frontend/ir/opcodes.inc b/src/shader_recompiler/frontend/ir/opcodes.inc
+index 84c8d4a934..59a822eed3 100644
+--- a/src/shader_recompiler/frontend/ir/opcodes.inc
++++ b/src/shader_recompiler/frontend/ir/opcodes.inc
+@@ -366,6 +366,7 @@ OPCODE(GlobalAtomicAnd32,                                   U32,            U64,
+ OPCODE(GlobalAtomicOr32,                                    U32,            U64,            U32,                                                            )
+ OPCODE(GlobalAtomicXor32,                                   U32,            U64,            U32,                                                            )
+ OPCODE(GlobalAtomicExchange32,                              U32,            U64,            U32,                                                            )
++OPCODE(GlobalAtomicCompareExchange32,                       U32,            U64,            U32,            U32,                                            )
+ OPCODE(GlobalAtomicIAdd64,                                  U64,            U64,            U64,                                                            )
+ OPCODE(GlobalAtomicSMin64,                                  U64,            U64,            U64,                                                            )
+ OPCODE(GlobalAtomicUMin64,                                  U64,            U64,            U64,                                                            )
+@@ -403,6 +404,7 @@ OPCODE(StorageAtomicAnd32,                                  U32,            U32,
+ OPCODE(StorageAtomicOr32,                                   U32,            U32,            U32,            U32,                                            )
+ OPCODE(StorageAtomicXor32,                                  U32,            U32,            U32,            U32,                                            )
+ OPCODE(StorageAtomicExchange32,                             U32,            U32,            U32,            U32,                                            )
++OPCODE(StorageAtomicCompareExchange32,                      U32,            U32,            U32,            U32,            U32,                            )
+ OPCODE(StorageAtomicIAdd64,                                 U64,            U32,            U32,            U64,                                            )
+ OPCODE(StorageAtomicSMin64,                                 U64,            U32,            U32,            U64,                                            )
+ OPCODE(StorageAtomicUMin64,                                 U64,            U32,            U32,            U64,                                            )
+diff --git a/src/shader_recompiler/frontend/maxwell/structured_control_flow.cpp b/src/shader_recompiler/frontend/maxwell/structured_control_flow.cpp
+index 640daadd05..4ed9f91dc0 100644
+--- a/src/shader_recompiler/frontend/maxwell/structured_control_flow.cpp
++++ b/src/shader_recompiler/frontend/maxwell/structured_control_flow.cpp
+@@ -917,16 +917,18 @@ private:
+             if (node.type != Type::Block) {
+                 continue;
+             }
+-            if (branch_depth > 1) {
+-                // Skip reordering nested demote branches.
+-                continue;
+-            }
+             for (const IR::Inst& inst : node.data.block->Instructions()) {
+                 const IR::Opcode op{inst.GetOpcode()};
+                 if (op == IR::Opcode::DemoteToHelperInvocation) {
+-                    demote_blocks.push_back(node.data.block);
++                    // Skip reordering nested demote branches.
++                    if (branch_depth <= 1) {
++                        demote_blocks.push_back(node.data.block);
++                    }
+                     break;
+                 }
++                // Returns count at any depth: a nested early return (an EXIT under two
++                // conditions, as native fragment programs end their discarded invocations) would
++                // otherwise leave before the demote moved to the end, and write its colours.
+                 if (op == IR::Opcode::Epilogue) {
+                     ++num_epilogues;
+                 }
+diff --git a/src/shader_recompiler/frontend/maxwell/translate/impl/atomic_operations_global_memory.cpp b/src/shader_recompiler/frontend/maxwell/translate/impl/atomic_operations_global_memory.cpp
+index 75087777dd..6cd738cbb3 100644
+--- a/src/shader_recompiler/frontend/maxwell/translate/impl/atomic_operations_global_memory.cpp
++++ b/src/shader_recompiler/frontend/maxwell/translate/impl/atomic_operations_global_memory.cpp
+@@ -201,6 +201,25 @@ void TranslatorVisitor::ATOM(u64 insn) {
+     GlobalAtomic(*this, atom.dest_reg, atom.operand_reg, offset, atom.size, atom.op, true);
+ }
+ 
++/// ATOM.CAS Rd, [Ra + imm], Rb: if the word equals Rb, store Rb+1; Rd gets the old word.
++void TranslatorVisitor::ATOM_cas(u64 insn) {
++    union {
++        u64 raw;
++        BitField<0, 8, IR::Reg> dest_reg;
++        BitField<20, 8, IR::Reg> compare_reg;
++        BitField<49, 3, u64> size;
++    } const atom{insn};
++    if (atom.size != 0) {
++        throw NotImplementedException("ATOM.CAS size {}", atom.size.Value());
++    }
++    const IR::U64 offset{AtomOffset(*this, insn)};
++    // The register after R254 is RZ; IR::Reg arithmetic refuses to step onto it.
++    const IR::Reg value_reg{atom.compare_reg == IR::Reg::R254 ? IR::Reg::RZ
++                                                               : atom.compare_reg + 1};
++    X(atom.dest_reg,
++      ir.GlobalAtomicCompareExchange(offset, X(atom.compare_reg), X(value_reg)));
++}
++
+ void TranslatorVisitor::RED(u64 insn) {
+     union {
+         u64 raw;
+diff --git a/src/shader_recompiler/frontend/maxwell/translate/impl/not_implemented.cpp b/src/shader_recompiler/frontend/maxwell/translate/impl/not_implemented.cpp
+index 4165ca2f66..4bfea5dd00 100644
+--- a/src/shader_recompiler/frontend/maxwell/translate/impl/not_implemented.cpp
++++ b/src/shader_recompiler/frontend/maxwell/translate/impl/not_implemented.cpp
+@@ -15,10 +15,6 @@ namespace Shader::Maxwell {
+     throw NotImplementedException("Instruction {} is not implemented", opcode);
+ }
+ 
+-void TranslatorVisitor::ATOM_cas(u64) {
+-    ThrowNotImplemented(Opcode::ATOM_cas);
+-}
+-
+ void TranslatorVisitor::ATOMS_cas(u64) {
+     ThrowNotImplemented(Opcode::ATOMS_cas);
+ }
+diff --git a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
+index f7954c53b8..ac2d77c671 100644
+--- a/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
++++ b/src/shader_recompiler/ir_opt/collect_shader_info_pass.cpp
+@@ -118,6 +118,7 @@ void CheckCBufNVN(Info& info, IR::Inst& inst) {
+     }
+ }
+ 
++/// Records the features, types and resources an instruction needs in the shader info
+ void VisitUsages(Info& info, IR::Inst& inst) {
+     switch (inst.GetOpcode()) {
+     case IR::Opcode::ImageRead:
+@@ -412,6 +413,7 @@ void VisitUsages(Info& info, IR::Inst& inst) {
+     case IR::Opcode::GlobalAtomicOr32:
+     case IR::Opcode::GlobalAtomicXor32:
+     case IR::Opcode::GlobalAtomicExchange32:
++    case IR::Opcode::GlobalAtomicCompareExchange32:
+     case IR::Opcode::GlobalAtomicIAdd64:
+     case IR::Opcode::GlobalAtomicSMin64:
+     case IR::Opcode::GlobalAtomicUMin64:
+@@ -659,6 +661,7 @@ void VisitUsages(Info& info, IR::Inst& inst) {
+     case IR::Opcode::StorageAtomicOr32:
+     case IR::Opcode::StorageAtomicXor32:
+     case IR::Opcode::StorageAtomicExchange32:
++    case IR::Opcode::StorageAtomicCompareExchange32:
+         info.used_storage_buffer_types |= IR::Type::U32;
+         break;
+     case IR::Opcode::LoadStorage64:
+diff --git a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
+index 2090276a5e..0f8dac5b98 100644
+--- a/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
++++ b/src/shader_recompiler/ir_opt/global_memory_to_storage_buffer_pass.cpp
+@@ -105,6 +105,7 @@ bool IsGlobalMemory(const IR::Inst& inst) {
+     case IR::Opcode::GlobalAtomicOr32:
+     case IR::Opcode::GlobalAtomicXor32:
+     case IR::Opcode::GlobalAtomicExchange32:
++    case IR::Opcode::GlobalAtomicCompareExchange32:
+     case IR::Opcode::GlobalAtomicIAdd64:
+     case IR::Opcode::GlobalAtomicSMin64:
+     case IR::Opcode::GlobalAtomicUMin64:
+@@ -157,6 +158,7 @@ bool IsGlobalMemoryWrite(const IR::Inst& inst) {
+     case IR::Opcode::GlobalAtomicOr32:
+     case IR::Opcode::GlobalAtomicXor32:
+     case IR::Opcode::GlobalAtomicExchange32:
++    case IR::Opcode::GlobalAtomicCompareExchange32:
+     case IR::Opcode::GlobalAtomicIAdd64:
+     case IR::Opcode::GlobalAtomicSMin64:
+     case IR::Opcode::GlobalAtomicUMin64:
+@@ -241,6 +243,8 @@ IR::Opcode GlobalToStorage(IR::Opcode opcode) {
+         return IR::Opcode::StorageAtomicXor32;
+     case IR::Opcode::GlobalAtomicExchange32:
+         return IR::Opcode::StorageAtomicExchange32;
++    case IR::Opcode::GlobalAtomicCompareExchange32:
++        return IR::Opcode::StorageAtomicCompareExchange32;
+     case IR::Opcode::GlobalAtomicIAdd64:
+         return IR::Opcode::StorageAtomicIAdd64;
+     case IR::Opcode::GlobalAtomicSMin64:
+@@ -1216,6 +1220,16 @@ void ReplaceAtomic(IR::Block& block, IR::Inst& inst, const IR::U32& storage_inde
+     inst.ReplaceUsesWith(value);
+ }
+ 
++/// Replace a global compare-exchange with its storage buffer equivalent, keeping both operands
++void ReplaceAtomicCompareExchange(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
++                                  const IR::U32& offset) {
++    const IR::Opcode new_opcode{GlobalToStorage(inst.GetOpcode())};
++    const auto it{IR::Block::InstructionList::s_iterator_to(inst)};
++    const IR::Value value{&*block.PrependNewInst(
++        it, new_opcode, {storage_index, offset, inst.Arg(1), inst.Arg(2)})};
++    inst.ReplaceUsesWith(value);
++}
++
+ /// Replace a global memory instruction with its storage buffer equivalent
+ void Replace(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
+              const IR::U32& offset) {
+@@ -1273,6 +1287,8 @@ void Replace(IR::Block& block, IR::Inst& inst, const IR::U32& storage_index,
+     case IR::Opcode::GlobalAtomicMaxF16x2:
+     case IR::Opcode::GlobalAtomicMaxF32x2:
+         return ReplaceAtomic(block, inst, storage_index, offset);
++    case IR::Opcode::GlobalAtomicCompareExchange32:
++        return ReplaceAtomicCompareExchange(block, inst, storage_index, offset);
+     default:
+         throw InvalidArgument("Invalid global memory opcode {}", inst.GetOpcode());
+     }
+diff --git a/src/tests/video_core/ampere_fast_fusion_logged.cpp b/src/tests/video_core/ampere_fast_fusion_logged.cpp
+index ffabc7ac46..43e01c244c 100644
+--- a/src/tests/video_core/ampere_fast_fusion_logged.cpp
++++ b/src/tests/video_core/ampere_fast_fusion_logged.cpp
+@@ -194,10 +194,11 @@ struct LoggedMachine {
+                     if (mask & (1U << i))
+                         predicates[i] = (value >> i) & 1;
+             } else if ((word & 0xfff0000000000000ULL) == 0x5b60000000000000ULL) {
+-                REQUIRE((bits(49, 3) == 5 || bits(49, 3) == 6));
++                REQUIRE((bits(49, 3) == 1 || bits(49, 3) == 5 || bits(49, 3) == 6));
+                 REQUIRE(bits(45, 2) == 0);
+                 REQUIRE(bits(0, 3) == 7);
+-                const bool result = bits(49, 3) == 5 ? Read(0, a) != Read(0, b)
++                const bool result = bits(49, 3) == 1 ? Read(0, a) < Read(0, b)
++                                    : bits(49, 3) == 5 ? Read(0, a) != Read(0, b)
+                                     : bits(48, 1)    ? s32(Read(0, a)) >= s32(Read(0, b))
+                                                      : Read(0, a) >= Read(0, b);
+                 const u32 output = bits(3, 3);
+@@ -254,6 +255,8 @@ struct LoggedMachine {
+                 write(0, static_cast<u32>(sum));
+                 if (bits(47, 1))
+                     carry = sum >> 32;
++            } else if ((word >> 56) == 0x1c) {
++                write(0, Read(0, a) + static_cast<u32>(bits(20, 32)));
+             } else if (((word >> 48) & 0xfffe) == 0x5c18) {
+                 write(0, (Read(0, a) << bits(39, 5)) + Read(0, b));
+             } else if ((word & 0xfff0000000000000ULL) == 0xe240000000000000ULL) {
+@@ -364,6 +367,8 @@ struct HalfIR {
+                 visitor.SHF_r_imm(word);
+             else if ((word >> 48) == 0x5c48)
+                 visitor.SHL_reg(word);
++            else if ((word >> 48) == 0x5c18)
++                visitor.ISCADD_reg(word);
+             else if (((word >> 48) & 0xfffc) == 0x5c10)
+                 visitor.IADD_reg(word);
+             else if ((word & 0xfc00000000000000ULL) == 0x1c00000000000000ULL)
+@@ -571,6 +576,57 @@ TEST_CASE("Ocarina packed float-to-byte conversion clamps before packing", "[vid
+     }
+ }
+ 
++TEST_CASE("Ocarina I2F from a uniform register selects any byte", "[video_core][ampere][oot]") {
++    // I2F.F32.U8 R9, UR17.B3
++    const Instruction convert{{0x00097d06, 0x30000011, 0x08001000, 0x000fe200}};
++    const auto lowered = LowerToMaxwell(std::array{convert, Exit});
++    INFO(lowered.error);
++    REQUIRE(lowered);
++    CHECK(lowered.instructions[lowered.source_instruction_offsets[0]] ==
++          (0x5cb8000000070000ULL | 9 | (u64{2} << 8) | (u64{233} << 20) | (u64{3} << 41)));
++}
++
++TEST_CASE("Ocarina F2IP packs two rounded unorm bytes", "[video_core][ampere][oot]") {
++    // F2IP.U8.F32 R41, R40, R39, RZ, from a compute program that scales both inputs by 255.
++    const Instruction convert{{0x28297243, 0x27, 0x000004ff, 0x000fc400}};
++    const auto lowered = LowerToMaxwell(std::array{convert, Exit});
++    INFO(lowered.error);
++    REQUIRE(lowered);
++    HalfIR translation{lowered.instructions};
++    const auto byte = [](f32 input) {
++        return std::isnan(input) ? 0U : u32(std::nearbyintf(std::clamp(input, 0.0f, 255.0f)));
++    };
++    const std::array inputs{-std::numeric_limits<f32>::infinity(), -1.0f, 0.0f, 0.25f, 0.75f, 127.5f,
++                            128.5f, 254.75f, 255.0f, 300.0f, std::numeric_limits<f32>::infinity(),
++                            std::numeric_limits<f32>::quiet_NaN()};
++    for (const f32 a : inputs) {
++        for (const f32 b : inputs) {
++            CAPTURE(a, b);
++            translation.values.clear();
++            translation.registers.fill(0xdeadbeef);
++            translation.registers[40] = std::bit_cast<u32>(a);
++            translation.registers[39] = std::bit_cast<u32>(b);
++            for (const auto& inst : translation.block.Instructions()) {
++                if (inst.GetOpcode() == IR::Opcode::SetRegister)
++                    translation.registers.at(static_cast<size_t>(inst.Arg(0).Reg())) =
++                        u32(translation.Value(inst.Arg(1)));
++                else
++                    translation.values.emplace(&inst, translation.Evaluate(inst));
++            }
++            CHECK(translation.registers[41] == (byte(b) | (byte(a) << 8)));
++            CHECK(translation.registers[40] == std::bit_cast<u32>(a));
++            CHECK(translation.registers[39] == std::bit_cast<u32>(b));
++        }
++    }
++    // Other rounding modes and a merge register aren't known forms yet.
++    auto modified = convert;
++    modified.words[2] = 0x000044ff;
++    CHECK_FALSE(LowerToMaxwell(std::array{modified, Exit}));
++    modified = convert;
++    modified.words[2] = 0x00000406;
++    CHECK_FALSE(LowerToMaxwell(std::array{modified, Exit}));
++}
++
+ TEST_CASE("Ocarina uniform multiply adds an immediate rather than reading a register",
+           "[video_core][ampere][oot]") {
+     const Instruction multiply{{0x040474a4, 0x00003c00, 0x0f8e0206, 0x000fc600}};
+@@ -977,6 +1033,157 @@ TEST_CASE(
+     }
+ }
+ 
++TEST_CASE("Ocarina call links stay proven across a predicate-to-register write",
++          "[video_core][ampere][fast_fusion_logged]") {
++    std::array<Instruction, 7> code{{
++        {{0x00097802, 0x30, 0xf00, 0}},
++        {{0xff107803, 0x40, 0, 0}}, // P2R R16, RZ, 0x40
++        {{0x00007944, 0x10, 0x03c00000, 0}},
++        Exit,
++        CapturedImmediatePackedFloatTrunc,
++        {{0x00047202, 9, 0xf00, 0}},
++        {{0x04007950, 0xffffff90, 0x03c3ffff, 0}},
++    }};
++    const auto lowered = LowerToMaxwell(code);
++    INFO(lowered.error);
++    REQUIRE(lowered);
++    code[1] = {{0xff097803, 0x40, 0, 0}}; // Writes the link register itself.
++    const auto clobbered = LowerToMaxwell(code);
++    CHECK_FALSE(clobbered);
++    CHECK(clobbered.error == "native call linkage mode");
++}
++
++TEST_CASE("Ocarina uniform LEA carries through any UP and preserves the rest",
++          "[video_core][ampere][fast_fusion_logged]") {
++    // ULEA UR10, UR6, UR10, 2 with the carry out in UP2, from Ocarina of Time.
++    constexpr Instruction captured{{0x060a7291, 0x0000000a, 0x0f84103f, 0x000fe200}};
++    constexpr u32 ur6 = 222, ur10 = 226;
++    constexpr std::array values{0U, 1U, 0x3fffffffU, 0x40000000U, 0xffffffffU};
++    for (u32 up = 0; up < 7; ++up) {
++        const u32 mask = 1U << (6 - up);
++        auto instruction = captured;
++        instruction.words[2] = (instruction.words[2] & ~(7U << 17)) | (up << 17);
++        const auto lowered = LowerToMaxwell(std::array{instruction, Exit});
++        CAPTURE(up);
++        INFO(lowered.error);
++        REQUIRE(lowered);
++        LoggedMachine machine;
++        for (u32 a : values) {
++            for (u32 b : values) {
++                for (u32 packed : {0x12340015U, 0x1234006aU}) {
++                    machine.registers[0][ur6] = a;
++                    machine.registers[0][ur10] = b;
++                    machine.registers[0][239] = packed;
++                    const auto before = machine.registers[0];
++                    const auto predicates = machine.predicates;
++                    machine.Run(lowered.instructions);
++                    CAPTURE(a, b, packed);
++                    const u32 sum = (a << 2) + b;
++                    for (u32 reg = 0; reg < 246; ++reg)
++                        CHECK(machine.registers[0][reg] ==
++                              (reg == ur10  ? sum
++                               : reg == 239 ? (packed & ~mask) | (sum < b ? mask : 0)
++                                            : before[reg]));
++                    CHECK(machine.predicates == predicates);
++                }
++            }
++        }
++    }
++}
++
++TEST_CASE("Ocarina indexed uniform constant loads keep their U8 and U16 widths",
++          "[video_core][ampere][fast_fusion_logged]") {
++    struct Case {
++        Instruction instruction;
++        u64 target, index, offset, bank, width;
++    };
++    // ULDC UR, c[bank][UR + offset] from Ocarina of Time's compute programs.
++    const std::array cases{
++        Case{{{0x11047abb, 0x01400000, 0x08000400, 0x000fe400}}, 220, 233, 0x00, 5, 2},
++        Case{{{0x06077abb, 0x01002080, 0x08000000, 0x000fe400}}, 223, 222, 0x82, 4, 0},
++        Case{{{0x0d047abb, 0x014000c0, 0x08000000, 0x000fe400}}, 220, 229, 0x03, 5, 0},
++        Case{{{0x06087abb, 0x01002080, 0x08000000, 0x000fe400}}, 224, 222, 0x82, 4, 0},
++    };
++    for (const Case& test : cases) {
++        CAPTURE(test.instruction.words[0]);
++        const auto lowered = LowerToMaxwell(std::array{test.instruction, Exit});
++        INFO(lowered.error);
++        REQUIRE(lowered);
++        CHECK(lowered.instructions[lowered.source_instruction_offsets[0]] ==
++              (0xef90000000070000ULL | test.target | (test.index << 8) | (test.offset << 20) |
++               (test.bank << 36) | (test.width << 48)));
++    }
++    // @UP0 with an index register and offset -1: the guard moves, the signed offset stays.
++    const Instruction negative{{0x0f070abb, 0x013fffc0, 0x08000000, 0x000fe400}};
++    const auto guarded = LowerToMaxwell(std::array{negative, Exit});
++    INFO(guarded.error);
++    REQUIRE(guarded);
++    const u64 load = 0xef90000000060000ULL | 223 | (u64{231} << 8) | (u64{0xffff} << 20) | (u64{4} << 36);
++    CHECK(std::ranges::find(guarded.instructions, load) != guarded.instructions.end());
++    const u64 transfer = 0x38f0000000070000ULL | (u64{239} << 8) | (u64{1U << 6} << 20);
++    CHECK(std::ranges::find(guarded.instructions, transfer) != guarded.instructions.end());
++    // An indexed load can have any immediate: the register can align it (ULDC.32 at UR15 + 0x29).
++    const Instruction indexed_word{{0x0f077abb, 0x01000a40, 0x08000800, 0x000fc600}};
++    const auto word = LowerToMaxwell(std::array{indexed_word, Exit});
++    INFO(word.error);
++    REQUIRE(word);
++    CHECK(word.instructions[word.source_instruction_offsets[0]] ==
++          (0xef90000000070000ULL | 223 | (u64{231} << 8) | (u64{0x29} << 20) | (u64{4} << 36) |
++           (u64{4} << 48)));
++    // A direct U16 load needs an even offset, and a direct subword load the short offset range.
++    Instruction misaligned{{0x00077ab9, 0x01000040, 0x00000400, 0x000fe400}};
++    CHECK_FALSE(LowerToMaxwell(std::array{misaligned, Exit}));
++    Instruction far{{0x00077ab9, 0x01200000, 0x00000000, 0x000fe400}};
++    CHECK_FALSE(LowerToMaxwell(std::array{far, Exit}));
++}
++
++TEST_CASE("Ocarina uniform immediate add carries through any UP and preserves the rest",
++          "[video_core][ampere][fast_fusion_logged]") {
++    // UIADD3 UR12, UR12, 0x10 with the carry out in UP4, from Ocarina of Time.
++    constexpr Instruction captured{{0x0c0c7890, 0x00000010, 0x0ff9e03f, 0x000fc400}};
++    constexpr u32 ur12 = 228;
++    constexpr std::array values{0U, 1U, 0xffffffefU, 0xfffffff0U, 0xffffffffU};
++    for (u32 up = 0; up < 7; ++up) {
++        const u32 mask = 1U << (6 - up);
++        auto carry_out = captured;
++        carry_out.words[2] = (carry_out.words[2] & ~(7U << 17)) | (up << 17);
++        auto carry_in = captured;
++        carry_in.words[2] = (carry_in.words[2] & ~(0xfU << 23)) | (7U << 17) | (1U << 10) | (up << 23);
++        const auto lowered_out = LowerToMaxwell(std::array{carry_out, Exit});
++        const auto lowered_in = LowerToMaxwell(std::array{carry_in, Exit});
++        CAPTURE(up);
++        INFO(lowered_out.error);
++        INFO(lowered_in.error);
++        REQUIRE(lowered_out);
++        REQUIRE(lowered_in);
++        LoggedMachine machine;
++        for (u32 a : values) {
++            for (u32 packed : {0x12340015U, 0x1234006aU}) {
++                machine.registers[0][ur12] = a;
++                machine.registers[0][239] = packed;
++                const auto before = machine.registers[0];
++                const auto predicates = machine.predicates;
++                machine.Run(lowered_out.instructions);
++                CAPTURE(a, packed);
++                const bool carried = u64{a} + 0x10 > 0xffffffffULL;
++                for (u32 reg = 0; reg < 246; ++reg)
++                    CHECK(machine.registers[0][reg] ==
++                          (reg == ur12  ? a + 0x10U
++                           : reg == 239 ? (packed & ~mask) | (carried ? mask : 0)
++                                        : before[reg]));
++                CHECK(machine.predicates == predicates);
++
++                machine.registers[0][ur12] = a;
++                machine.registers[0][239] = packed;
++                machine.Run(lowered_in.instructions);
++                CHECK(machine.registers[0][ur12] == a + 0x10U + ((packed & mask) != 0 ? 1U : 0U));
++                CHECK(machine.registers[0][239] == packed);
++                CHECK(machine.predicates == predicates);
++            }
++        }
++    }
++}
++
+ TEST_CASE(
+     "Fast Fusion captured half conversion keeps production IR conversions finite and in range",
+     "[video_core][ampere][fast_fusion_logged]") {
+diff --git a/src/tests/video_core/ampere_starfox_test10.cpp b/src/tests/video_core/ampere_starfox_test10.cpp
+index 199f8e80ca..184c7ff08b 100644
+--- a/src/tests/video_core/ampere_starfox_test10.cpp
++++ b/src/tests/video_core/ampere_starfox_test10.cpp
+@@ -330,6 +330,11 @@ TEST_CASE("Star Fox ULDC U16 rejects unrepresentable offsets and unsupported mod
+     auto indexed = CapturedUniformLoad;
+     SetBits(indexed, 0, 12, 0xabb);
+     SetBits(indexed, 91, 1, 1);
++    // Ocarina of Time loads U8 and U16 values through an index register.
++    const auto indexed_load = LowerToMaxwell(std::array{indexed, Exit});
++    INFO(indexed_load.error);
++    CHECK(indexed_load);
++    SetBits(indexed, 73, 3, 1);
+     CHECK_FALSE(LowerToMaxwell(std::array{indexed, Exit}));
+ }
+ 
+diff --git a/src/video_core/renderer_vulkan/vk_query_cache.cpp b/src/video_core/renderer_vulkan/vk_query_cache.cpp
+index 6857cf6eb6..5a6a6026cd 100644
+--- a/src/video_core/renderer_vulkan/vk_query_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_query_cache.cpp
+@@ -210,8 +210,17 @@ public:
+         last_accumulation_checkpoint = (std::max)(last_accumulation_checkpoint, num_slots_used);
+     }
+ 
++    // Called at each submission. The running query carries the count across it: a guest's
++    // reset-to-report window can span one.
+     void CloseCounter() override {
+         PauseCounter();
++        // A title that counts without resetting or reporting grows the query by a slot at every
++        // submission and render pass, and the query keeps every bank it touches alive. Ocarina of
++        // Time's title screen and file select reached 16,384 slots over 64 banks (its gameplay
++        // windows span at most 36 slots). Past a bank, drop the count as a reset would.
++        if (current_query && current_query->size_slots > SamplesQueryBank::BANK_SIZE) {
++            ResetCounter();
++        }
+     }
+ 
+     bool HasPendingSync() const override {
+diff --git a/src/video_core/renderer_vulkan/vk_scheduler.cpp b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+index f2a26f2e2b..15f1743c2a 100644
+--- a/src/video_core/renderer_vulkan/vk_scheduler.cpp
++++ b/src/video_core/renderer_vulkan/vk_scheduler.cpp
+@@ -845,7 +845,9 @@ void Scheduler::InvalidateState() {
+ }
+ 
+ void Scheduler::EndPendingOperations() {
+-    query_cache->CounterReset(VideoCommon::QueryType::ZPassPixelCount64);
++    // Pause, don't reset: a submission can land between a guest's counter reset and its report,
++    // and resetting here would drop the samples counted so far (the report then reads too low).
++    query_cache->CounterClose(VideoCommon::QueryType::ZPassPixelCount64);
+     EndRenderPass();
+ }
+ 

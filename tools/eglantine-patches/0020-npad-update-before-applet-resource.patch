@@ -1,0 +1,14 @@
+--- a/src/hid_core/resources/npad/npad.cpp
++++ b/src/hid_core/resources/npad/npad.cpp
+@@ -144,6 +144,11 @@
+ }
+ 
+ void NPad::ControllerUpdate(Kernel::KernelCore& kernel, Core::HID::ControllerTriggerType type, std::size_t controller_idx) {
++    // The pad thread reports motion from the start of a session; the HID service may not have
++    // set the applet resource yet, and there is nothing to update before it has.
++    if (applet_resource_holder.applet_resource == nullptr) {
++        return;
++    }
+     // Input callbacks can arrive before SetNpadExternals installs the applet resource.
+     const auto applet_resource = applet_resource_holder.applet_resource;
+     if (applet_resource == nullptr) {

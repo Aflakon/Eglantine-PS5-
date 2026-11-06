@@ -1,0 +1,35 @@
+diff --git a/src/video_core/gpu_thread.h b/src/video_core/gpu_thread.h
+--- a/src/video_core/gpu_thread.h
++++ b/src/video_core/gpu_thread.h
+@@ -102,7 +102,10 @@ struct CommandDataContainer {
+ 
+ /// Struct used to synchronize the GPU thread
+ struct SynchState final {
+-    using CommandQueue = Common::SPSCQueue<CommandDataContainer>;
++    // Room for a burst of sparse tile maps. Their callers hold the nx2:gpu locks while they push,
++    // and the GPU thread takes those locks to back a sparse write: with the queue full, neither
++    // moves (Mario Kart World froze on its first screen with 4096 entries).
++    using CommandQueue = Common::SPSCQueue<CommandDataContainer, 0x10000>;
+     std::mutex write_lock;
+     CommandQueue queue;
+     u64 last_fence{};
+diff --git a/src/video_core/dma_pusher.h b/src/video_core/dma_pusher.h
+index a245c39819..3e7a74f411 100644
+--- a/src/video_core/dma_pusher.h
++++ b/src/video_core/dma_pusher.h
+@@ -113,10 +113,12 @@ struct CommandList final {
+     CommandList() = default;
+     explicit CommandList(std::size_t size) : command_lists(size) {}
+     explicit CommandList(boost::container::small_vector<CommandHeader, 512>&& prefetch_command_list_)
+-        : prefetch_command_list{std::move(prefetch_command_list_)} {}
++        : prefetch_command_list(prefetch_command_list_.begin(), prefetch_command_list_.end()) {}
+ 
+-    boost::container::small_vector<CommandListHeader, 512> command_lists;
+-    boost::container::small_vector<CommandHeader, 512> prefetch_command_list;
++    // Few entries in place: this struct is a slot of the GPU thread's queue (0x10000 of them), and
++    // 512 in each vector took 395 MiB for the queue alone. Longer lists go on the heap.
++    boost::container::small_vector<CommandListHeader, 32> command_lists;
++    boost::container::small_vector<CommandHeader, 32> prefetch_command_list;
+     /// EDEN_NX2_PB_CHECK: hash of each entry's words when it was submitted.
+     std::vector<u64> submit_hashes;
+     /// The entries' words when they were submitted (NX2), each entry's at submitted_offsets[i]:

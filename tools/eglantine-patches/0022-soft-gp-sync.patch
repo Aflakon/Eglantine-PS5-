@@ -1,0 +1,14 @@
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -113,7 +113,10 @@
+     const CommandListHeader& header = current_command;
+     dma_state.dma_get = header.addr;
+ 
+-    if (signal_sync && !synced) {
++    // PS5 test switch: a GP entry's sync bit still submits its work and signals a fence, but the
++    // next entry does not wait for it. A wait per entry cost about a second per frame here.
++    static const bool soft_gp_sync = std::fopen("/data/eglantineps5/soft-sync.txt", "r") != nullptr;
++    if (signal_sync && !synced && !soft_gp_sync) {
+         std::unique_lock lk(sync_mutex);
+         sync_cv.wait(lk, [this]() { return synced; });
+         signal_sync = false;

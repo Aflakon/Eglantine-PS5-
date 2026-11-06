@@ -1,0 +1,81 @@
+--- a/src/video_core/gpu_split.cpp
++++ b/src/video_core/gpu_split.cpp
+@@ -40,6 +40,11 @@
+     asm volatile("yield");
+ #else
+     std::this_thread::yield();
++    // A back thread whose wake-up was lost: wake it again.
++    if ((spins & 1023) == 0 && back_waiting.load(std::memory_order_seq_cst)) {
++        wake.fetch_add(1, std::memory_order_seq_cst);
++        wake.notify_all();
++    }
+ #endif
+ }
+ 
+@@ -128,7 +133,7 @@
+     }
+     back_thread.request_stop();
+     wake.fetch_add(1, std::memory_order_seq_cst);
+-    wake.notify_one();
++    wake.notify_all();
+     back_thread.join();
+     active = false;
+     // The split is static and outlives the emulation session. The next session's back thread
+@@ -179,6 +184,11 @@
+             Pause();
+         } else {
+             std::this_thread::yield();
++            // A back thread whose wake-up was lost: wake it again.
++            if ((spins & 1023) == 0 && back_waiting.load(std::memory_order_seq_cst)) {
++                wake.fetch_add(1, std::memory_order_seq_cst);
++                wake.notify_all();
++            }
+         }
+     }
+ }
+@@ -192,7 +202,9 @@
+     published.store(write_position, std::memory_order_seq_cst);
+     if (back_waiting.load(std::memory_order_seq_cst)) {
+         wake.fetch_add(1, std::memory_order_seq_cst);
+-        wake.notify_one();
++        // All: libc++ parks atomic waiters in a shared hash table, where notify_one can wake an
++        // unrelated waiter on the same slot and leave the back thread asleep.
++        wake.notify_all();
+     }
+ }
+ 
+@@ -215,6 +227,11 @@
+             Pause();
+         } else {
+             std::this_thread::yield();
++            // A back thread whose wake-up was lost: wake it again.
++            if ((spins & 1023) == 0 && back_waiting.load(std::memory_order_seq_cst)) {
++                wake.fetch_add(1, std::memory_order_seq_cst);
++                wake.notify_all();
++            }
+         }
+     }
+ }
+@@ -247,6 +264,11 @@
+             Pause();
+         } else {
+             std::this_thread::yield();
++            // A back thread whose wake-up was lost: wake it again.
++            if ((spins & 1023) == 0 && back_waiting.load(std::memory_order_seq_cst)) {
++                wake.fetch_add(1, std::memory_order_seq_cst);
++                wake.notify_all();
++            }
+         }
+     }
+ }
+--- a/src/video_core/gpu_split.h
++++ b/src/video_core/gpu_split.h
+@@ -89,7 +89,7 @@
+     void RequestIdleHook() {
+         hook_requested.store(true, std::memory_order_seq_cst);
+         wake.fetch_add(1, std::memory_order_seq_cst);
+-        wake.notify_one();
++        wake.notify_all();
+     }
+ 
+     /// Starts the back thread once the split is wanted (EDEN_NX2_SPLIT=1, a Switch 2 title,

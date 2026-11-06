@@ -1,0 +1,24 @@
+--- a/src/video_core/vulkan_common/vulkan_memory_allocator.h
++++ b/src/video_core/vulkan_common/vulkan_memory_allocator.h
+@@ -19,6 +19,8 @@
+ #include "video_core/vulkan_common/vulkan_wrapper.h"
+ #include "video_core/vulkan_common/vma.h"
+ 
++extern "C" std::size_t eden_guest_memory_reclaim(std::size_t want) noexcept __attribute__((weak));
++
+ namespace Vulkan {
+ 
+     class Device;
+@@ -142,7 +144,11 @@
+         }
+ 
+         bool RelieveMemory() const {
+-            return memory_relief && memory_relief();
++            const bool relieved = memory_relief && memory_relief();
++            // Then cold guest memory, compressed now (PS5 port; absent elsewhere): a save loading
++            // at 1.5x asked for ~4 GB within seconds, before the scanner's next pass.
++            const bool reclaimed = eden_guest_memory_reclaim && eden_guest_memory_reclaim(256u << 20) != 0;
++            return relieved || reclaimed;
+         }
+ 
+         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const;

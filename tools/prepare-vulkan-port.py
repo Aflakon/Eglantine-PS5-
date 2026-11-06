@@ -8,9 +8,91 @@ report = '--report' in sys.argv
 source, output = map(Path, [a for a in sys.argv[1:] if a != '--report'])
 port = Path(__file__).resolve().parents[1] / 'headless'
 broken = []
+LICHII_MOVED = [
+    ('Func&& draw_func) {', 'Func&& draw_func, bool is_indirect) {'),
+    ('report_failure("configure failed");\n',
+     'report_failure("configure failed");\n        TraceRenderState(is_indexed, "configure-failed", nullptr);\n'),
+    ('        draw_func();',
+     '        scheduler.TraceGraphicsPipeline(pipeline->ShaderHashes());\n'
+     '        trace_draw_hashes = {pipeline->ShaderHashes()[1], pipeline->ShaderHashes()[5]};\n'
+     '        draw_func();'),
+    ('        scheduler.Record([pipeline, indirect_buffer = buffer->Handle(),',
+     '        scheduler.TraceComputePipeline(pipeline->ShaderHash());\n'
+     '        scheduler.Record([this, pipeline, indirect_buffer = buffer->Handle(),'),
+    ('        cmdbuf.Dispatch(dim[0], dim[1], dim[2]);\n',
+     '        scheduler.TraceGpuWork(cmdbuf, pipeline->ShaderHash(), 0, dim,\n'
+     '                               [&] { cmdbuf.Dispatch(dim[0], dim[1], dim[2]); });\n'),
+]
+LICHII_PRESENTED = ('    const auto presented = trace ? std::chrono::steady_clock::now()\n'
+                    '                                 : std::chrono::steady_clock::time_point{};\n')
+LICHII_REWRITTEN = [
+    ('        upload_cmdbuf.End();\n        cmdbuf.End();\n',
+     '        cmdbuf.End();\n\n        if (on_submit) {',
+     '        GpuTimeEnd(cmdbuf);\n        cmdbuf.End();\n\n        if (on_submit) {'),
+    ('            vk::Check(result);\n            break;\n        }\n    });\n    chunk->MarkSubmit();',
+     '            vk::Check(result);\n            break;\n        }\n        if (trace_frame_end != 0) {',
+     '            vk::Check(result);\n            break;\n        }\n        GpuTimeCollect(device);\n        if (trace_frame_end != 0) {'),
+    ('    RenderScreenshot(framebuffers);\n    Frame* frame = present_manager.GetRenderFrame();',
+     '    RenderScreenshot(framebuffers);\n    const auto acquiring',
+     '    RenderScreenshot(framebuffers);\n'
+     '    if (::Eden::Display::SkipFrame()) {\n'
+     '        gpu.RendererFrameEndNotify();\n'
+     '        rasterizer.TickFrame();\n'
+     '        return;\n'
+     '    }\n'
+     '    const auto acquiring'),
+    ('    present_manager.Present(frame);\n#ifdef HAS_LSFG\n    scheduler.DispatchWork();\n#endif',
+     '    present_manager.Present(frame);\n' + LICHII_PRESENTED + '#ifdef HAS_LSFG\n    scheduler.DispatchWork();\n#endif',
+     '    present_manager.Present(frame);\n    Eden::CountPresentedFrame();\n' + LICHII_PRESENTED + '    scheduler.DispatchWork();'),
+]
+LICHII_REWRITTEN += [
+    # hcr=exact, the port's default: a pending host query is not in any buffer yet, so the CPU
+    # evaluation waits for it instead of drawing unconditionally.
+    ('    if (!is_in_ac[0] && !is_in_ac[1]) {\n        EndHostConditionalRendering();',
+     '    if (!qc_dirty && !is_in_bc[0] && !is_in_bc[1]) {\n        EndHostConditionalRendering();\n'
+     '        TraceConditionalRendering("guest-synchronized", false, object_1.address, object_2.address);\n'
+     '        return false;\n    }\n',
+     '    if (!qc_dirty && !is_in_bc[0] && !is_in_bc[1]) {\n        EndHostConditionalRendering();\n'
+     '        TraceConditionalRendering("guest-synchronized", false, object_1.address, object_2.address);\n'
+     '        return false;\n    }\n'
+     '    if (::Eden::DevVulkan::hcr_mode == 1 && qc_dirty) {\n'
+     '        EndHostConditionalRendering();\n        return false;\n    }\n'),
+    ('    if (!is_gpu_high) {\n        EndHostConditionalRendering();',
+     '    if (!is_gpu_high) {\n        EndHostConditionalRendering();\n'
+     '        TraceConditionalRendering("accuracy-bypass", true, object_1.address, object_2.address);\n'
+     '        return true;\n    }\n\n'
+     '    if (!is_in_bc[0] && !is_in_bc[1]) {\n        EndHostConditionalRendering();\n'
+     '        TraceConditionalRendering("query-cache-bypass", true, object_1.address, object_2.address);\n'
+     '        return true;\n    }\n',
+     '    // Eden draws these unconditionally; hcr=exact evaluates them on the CPU instead.\n'
+     '    if (!is_gpu_high || (!is_in_bc[0] && !is_in_bc[1])) {\n'
+     '        EndHostConditionalRendering();\n'
+     '        return ::Eden::DevVulkan::hcr_mode != 1;\n    }\n'),
+]
+LICHII_DROPPED = (
+    '#ifdef __ANDROID__\n    static constexpr u32 DRAWS_TO_DISPATCH',
+    'bool QueryCacheRuntime::HostConditionalRenderingCompareValue(VideoCommon::LookupData object_1,',
+    '    if (!impl->device.IsExtConditionalRendering()) {\n        return false;\n    }\n\n    const auto check_in_bc',
+    '            HostConditionalRenderingCompareValueImpl(*objects[j], equal_check);\n            return true;',
+)
 def adapt(relative, destination, replacements):
     text = (source / relative).read_text()
     for old, new in replacements:
+        if old not in text:
+            # A core that moved these lines (Lichii): the same edit on its text, or nothing when the
+            # edit only measures or serves development switches that are off here.
+            for fragment, moved in LICHII_MOVED:
+                if fragment in old and fragment in new:
+                    candidate = old.replace(fragment, moved)
+                    if candidate in text:
+                        old, new = candidate, new.replace(fragment, moved)
+                        break
+            for fragment, moved_old, moved_new in LICHII_REWRITTEN:
+                if old.startswith(fragment) and moved_old in text:
+                    old, new = moved_old, moved_new
+                    break
+            if old not in text and any(old.startswith(f) for f in LICHII_DROPPED):
+                continue
         if relative.endswith('/vk_rasterizer.cpp') and old.endswith('// update engine as channel may be different.') and old not in text:
             marker = '// Donkey Kong Bananza\'s terrain:'
             if marker in text:
@@ -211,7 +293,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {'''),
      '    static unsigned poll = 0;\n'
      '    static bool active = false;\n'
      '    if (!active && ::Eden::DevVulkan::trace_pipelines && (++poll & 255) == 0)\n'
-     '        active = std::filesystem::exists("/app0/sync-draws.txt");\n'
+     '        active = std::filesystem::exists("/data/eglantineps5/sync-draws.txt");\n'
      '    return active;\n'
      '}\n'
      'void SyncProbe(Scheduler& scheduler, const char* kind, const void* pipeline) {\n'
@@ -443,6 +525,14 @@ ALLOCATOR_REFUSED = """    VkResult created = CALL;
         if ((times & (times - 1)) == 0) { // the 1st, 2nd, 4th, 8th ... time
             std::fprintf(stderr, "EDEN_GRAPHICS_MEMORY budget refused %llu requests; asked again outside it: result %d, DETAIL\\n",
                          times, int(created), VALUES);
+        }
+        // Refused outside it too: Ocarina of Time's first scene ended here, in a buffer cache
+        // buffer, with the pool full. The caches free what they hold only for a while (temporary
+        // decode images, idle staging) and it is asked for once more.
+        if (created != VK_SUCCESS && RelieveMemory()) {
+            created = AGAIN;
+            std::fprintf(stderr, "EDEN_GRAPHICS_MEMORY freed temporary memory and asked again: result %d, DETAIL\\n",
+                         int(created), VALUES);
         }
         if (created != VK_SUCCESS) {
             VmaBudget held[VK_MAX_MEMORY_HEAPS]{};
@@ -774,7 +864,7 @@ adapt('src/video_core/renderer_vulkan/renderer_vulkan.h',
 adapt('src/video_core/renderer_vulkan/renderer_vulkan.cpp', 'vulkan_renderer.cpp', [
     ('#include "video_core/renderer_vulkan/renderer_vulkan.h"',
      '#include "video_core/renderer_vulkan/renderer_vulkan.h"\n#include "display_refresh.h"\n'
-     '#include "diagnostics.h"\n#include "hud.h"'),
+     '#include "diagnostics.h"\n#include "hud.h"\n#include "video_core/gpu_split.h"'),
     # The HUD counted the guest rate only: OnFrameDisplayed() runs once per Composite(), while the
     # frames frame generation adds are presented through PresentManager::Present() (hud.h). Count
     # every frame handed to the present manager.
@@ -1164,6 +1254,9 @@ for statement in (
         'auto cfg_cost = Eden::Performance::VulkanTimer(20);\n        ' + statement +
         '\n        cfg_cost.reset();')
 for old, new in shader_costs:
+    # Lichii's compute pipeline entry has no such early return; this edit only traced first uses.
+    if old.startswith('    if (!is_new) {') and old not in shader_source:
+        continue
     if shader_source.count(old) != 1:
         raise RuntimeError(f'Shader pipeline anchor changed: {old[:60]}')
     shader_source = shader_source.replace(old, new)
@@ -1238,7 +1331,7 @@ probes = {
 }
 for name, index, expected in (
     ('vk_fence_manager', 6, 1), ('vk_buffer_cache', 7, 4),
-    ('vk_texture_cache', 8, 1), ('vk_swapchain', 9, 6),
+    ('vk_texture_cache', 8, 3), ('vk_swapchain', 9, 6),
     ('vk_descriptor_buffer', 10, 2), ('vk_multi_range_buffer', 11, 1),
     ('vk_compute_pass', 12, 1),
 ):

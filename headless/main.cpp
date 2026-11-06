@@ -1,6 +1,5 @@
-#ifdef EDEN_DEV_ROM_ID
+// Scripted input: development builds (compat-input.txt) and remote control (remote-input.txt).
 #include "development_input.h"
-#endif
 #include <utility>
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <cstdio>
@@ -116,6 +115,7 @@ extern "C" bool eden_jit_shared;  // headless/dynarmic/jit_group_support.inc
 #include "stop_limit.h"
 namespace Common {
 void SetGuestMemoryFine(bool on) noexcept;
+void SetGuestMemoryService(bool on, bool scan, bool dedup) noexcept;
 bool SparseTablesAvailable() noexcept; // src/memory_pages.cpp
 }
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)
@@ -468,6 +468,12 @@ int main(int argc, char** argv) {
             std::ifstream left_behind(Eden::AppFile("compat-input.txt"));
             Eden::DevelopmentInput::IgnoreExisting(left_behind);
         }
+#else
+        {
+            // Remote control's input file: what an earlier run left is not for this process.
+            std::ifstream left_behind(Eden::AppFile("remote-input.txt"));
+            Eden::DevelopmentInput::IgnoreExisting(left_behind);
+        }
 #endif
 #endif
         Common::FS::CreateEdenPaths();
@@ -714,6 +720,17 @@ int main(int argc, char** argv) {
             filter.SetClassLevel(Common::Log::Class::Service_FS, Common::Log::Level::Info);
 #if defined(PS5_NATIVE) && !defined(EDEN_DEV_PROFILE) && !defined(EDEN_DEV_ROM_ID)
             if (Eden::LoadPreferences().detailed_logging) filter.ParseFilterString("*:Debug");
+            // PS5 test: with detailed logging the game passes its start and then runs slowly. Go back
+            // to the normal log level after a minute, to see whether the logging is what costs (quiet-log).
+            if (Eden::LoadPreferences().detailed_logging &&
+                std::ifstream("/data/eglantineps5/quiet-log-after-60s.txt")) {
+                std::thread([normal = Common::Log::Filter{}]() mutable {
+                    std::this_thread::sleep_for(std::chrono::seconds(60));
+                    normal.ParseFilterString(Settings::values.log_filter.GetValue());
+                    Common::Log::SetGlobalFilter(normal);
+                    std::puts("EDEN_QUIET_LOG back to the normal level");
+                }).detach();
+            }
 #endif
             Common::Log::SetGlobalFilter(filter);
         }
@@ -757,6 +774,44 @@ int main(int argc, char** argv) {
         Settings::values.memory_layout_mode = Settings::MemoryLayout::Memory_4Gb;
         // A development run that names jit_list in dev-settings decides the block list by itself.
         [[maybe_unused]] bool dev_block_list = false;  // read where a session applies its settings
+        // One-run switches for tests of a release build; no file means the defaults.
+        {
+            std::ifstream switches("/data/eglantineps5/dev-switches.txt");
+            for (std::string entry; switches >> entry;) {
+                if (entry == "pipeline_trace=on") {
+                    Eden::DevVulkan::trace_pipelines = true;
+                } else if (entry == "robustness2=on") {
+                    Eden::DevVulkan::robustness2 = true;
+                } else if (entry == "gpu_time=on") {
+                    Eden::DevVulkan::gpu_time = true;
+                } else if (entry == "submit_sync=on") {
+                    Eden::DevVulkan::sync_submissions = true;
+                } else if (entry == "sparse=off") {
+                    Eden::DevVulkan::disable_sparse = true;
+                } else if (entry == "multirange=off") {
+                    Eden::DevVulkan::disable_multi_range = true;
+                } else if (entry == "conditional_rendering=off") {
+                    Eden::DevVulkan::disable_conditional_rendering = true;
+                } else if (entry == "compute_barriers=off") {
+                    Eden::DevVulkan::compute_barriers = false;
+                } else if (entry == "astc=bc1" || entry == "astc=bc3" || entry == "astc=uncompressed") {
+                    // How ASTC textures are re-compressed for the GPU (BC1 halves BC3, without alpha detail).
+                    Settings::values.astc_recompression.SetValue(entry.ends_with("bc1") ? Settings::AstcRecompression::Bc1
+                        : entry.ends_with("bc3") ? Settings::AstcRecompression::Bc3 : Settings::AstcRecompression::Uncompressed);
+                } else if (entry.starts_with("log_filter=")) {
+                    // The log filter a session uses after its first minute, '+' for spaces.
+                    std::string text = entry.substr(11);
+                    std::replace(text.begin(), text.end(), '+', ' ');
+                    Settings::values.log_filter.SetValue(text);
+                } else if (entry.starts_with("env=") && entry.find('=', 4) != std::string::npos) {
+                    const auto split = entry.find('=', 4);
+                    setenv(entry.substr(4, split - 4).c_str(), entry.c_str() + split + 1, 1);
+                }
+                std::printf("EDEN_DEV_SWITCH %s\n", entry.c_str());
+            }
+        }
+        // The core skips task/mesh draws while this file exists (it looks every 1024 draws).
+        setenv("EDEN_NX2_NO_MESH_FILE", "/data/eglantineps5/no-mesh.txt", 1);
 #ifdef EDEN_DEV_PROFILE
         // One-run A/B switches written by the development runner; absent = defaults.
         {
@@ -1044,7 +1099,18 @@ int main(int argc, char** argv) {
 #ifdef PS5_NATIVE
             // Donkey Kong Bananza runs short of memory: written slots with many pages of zeroes keep
             // only the others (576 MiB of its 4.3 GiB were such pages), and a write makes one whole.
-            ::Common::SetGuestMemoryFine(eden_game_title_id(guest) == 0x040074A01BF12000ULL);
+            ::Common::SetGuestMemoryFine(eden_game_title_id(guest) == 0x040074A01BF12000ULL ||
+                                         eden_game_title_id(guest) == 0x0400486024DEC000ULL);
+            {
+                // dev-settings.txt cram_dedup=on: slots of the guest's memory with the same bytes share
+                // one block (off by default: it cost a large game 30 -> 20 FPS). For memory tests.
+                std::ifstream dev_settings(Eden::AppFile("dev-settings.txt"));
+                const std::string text{std::istreambuf_iterator<char>(dev_settings), std::istreambuf_iterator<char>()};
+                if (text.find("cram_dedup=on") != std::string::npos) {
+                    ::Common::SetGuestMemoryService(true, true, true);
+                    std::fputs("EDEN_CRAM dedup on (dev-settings)\n", stderr);
+                }
+            }
 #endif
             Settings::values.use_asynchronous_shaders = speed.async_shaders;
             if (speed.fast_gpu) {
@@ -1055,6 +1121,12 @@ int main(int argc, char** argv) {
             if (speed.unsafe_cpu) Settings::values.cpu_accuracy = Settings::CpuAccuracy::Unsafe;
             if (speed.unsafe_dma) Settings::values.dma_accuracy.SetValue(Settings::DmaAccuracy::Unsafe);
             Settings::values.use_reactive_flushing.SetValue(speed.reactive_flushing);
+            // Ocarina of Time (Switch 2): the setting its PC users need, compute and memory operations
+            // kept in step.
+            if (eden_game_title_id(guest) == 0x0400486024DEC000ULL &&
+                !std::ifstream("/data/eglantineps5/sync-memory-off.txt")) {
+                Settings::values.sync_memory_operations.SetValue(true);
+            }
             Settings::values.skip_cpu_inner_invalidation.SetValue(speed.skip_invalidation);
             // The block list is off unless the settings turn it on (block-list.txt in the app
             // folder still does, further down).
@@ -1070,7 +1142,9 @@ int main(int argc, char** argv) {
                                     on(Settings::values.dma_accuracy.GetValue() == Settings::DmaAccuracy::Unsafe) +
                                     ", reactive flushing " + on(Settings::values.use_reactive_flushing.GetValue()) +
                                     ", skip invalidation " +
-                                    on(Settings::values.skip_cpu_inner_invalidation.GetValue())).c_str());
+                                    on(Settings::values.skip_cpu_inner_invalidation.GetValue()) +
+                                    ", sync memory " +
+                                    on(Settings::values.sync_memory_operations.GetValue())).c_str());
             // What a crash report says was running.
             char title_id[20];
             std::snprintf(title_id, sizeof(title_id), "%016llx",
@@ -1081,6 +1155,11 @@ int main(int argc, char** argv) {
             const u64 title = eden_game_title_id(guest);
             const auto all_mods = Eden::Mods::List(Eden::AssetsPath("mods"), title);
             auto mods_off = Eden::LoadDisabledMods(title);
+            // Ocarina of Time: Lichii turns on a built-in "Max Resolution" patch, since on a PC the
+            // game's dynamic resolution sits at its 854x480 floor. On the PS5 that floor is what the
+            // GPU and its memory can give; /data/eglantineps5/max-res.txt keeps the patch on.
+            if (title == 0x0400486024DEC000ULL && !std::ifstream("/data/eglantineps5/max-res.txt"))
+                mods_off.push_back("Max Resolution (built-in)");
             if (!Eden::LoadModsEnabled(title)) {
                 for (const auto& mod : all_mods)
                     if (std::find(mods_off.begin(), mods_off.end(), mod.name) == mods_off.end())
@@ -1543,6 +1622,12 @@ int main(int argc, char** argv) {
 #ifdef EDEN_DEV_ROM_ID
                     Eden::DevelopmentInput development_input;
                     unsigned command_poll = 0;
+#else
+                    // Remote control (remote-control.txt): pulses from remote-input.txt, so tests
+                    // run without anyone at the controller (ps5-toolkit/scripts/eglrun.py).
+                    const bool remote_control = Eden::FileExists(Eden::AppFile("remote-control.txt"));
+                    Eden::DevelopmentInput remote_input;
+                    unsigned remote_poll = 0;
 #endif
                     while (!stop.stop_requested()) {
                         if (auto error = Eden::TakeGpuFailure()) {
@@ -1563,8 +1648,20 @@ int main(int argc, char** argv) {
 #ifdef EDEN_DEV_ROM_ID
                         if (!development_input.active) { UpdateGrips(system, *pad); pad->Poll(); }
 #else
-                        UpdateGrips(system, *pad);
-                        pad->Poll();
+                        if (!remote_input.active) { UpdateGrips(system, *pad); pad->Poll(); }
+                        if (remote_control) {
+                            const auto remote_now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+                            if (++remote_poll >= 25) {
+                                remote_poll = 0;
+                                std::ifstream command(Eden::AppFile("remote-input.txt"));
+                                if (remote_input.Read(command, remote_now))
+                                    std::printf("EDEN_REMOTE_INPUT sequence=%llu buttons=%x\n",
+                                        static_cast<unsigned long long>(remote_input.sequence), remote_input.buttons);
+                            }
+                            if (const auto sample = remote_input.Sample(remote_now))
+                                pad->Consume({&*sample, 1});
+                        }
 #endif
 #ifdef EDEN_DEV_ROM_ID
                         const auto command_now = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1743,7 +1840,19 @@ int main(int argc, char** argv) {
                         }
                         }
 #else
-                        completion->wake.wait(lock, completed);
+                        if (!Eden::FileExists(Eden::AppFile("remote-control.txt"))) {
+                            completion->wake.wait(lock, completed);
+                        } else {
+                            // Remote control: a picture of the next frame when capture-once.txt
+                            // appears (logs/game-frame.ppm, EDEN_GAME_CAPTURE in heap.log).
+                            while (!completion->wake.wait_for(lock, std::chrono::milliseconds(500), completed)) {
+                                lock.unlock();
+                                std::error_code capture_error;
+                                if (std::filesystem::remove(Eden::AppFile("capture-once.txt"), capture_error))
+                                    window.CaptureNextFrame(system.GPU().Renderer(), [] {});
+                                lock.lock();
+                            }
+                        }
 #endif
                     } else
 #endif

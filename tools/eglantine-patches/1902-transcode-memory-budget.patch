@@ -1,0 +1,388 @@
+--- a/src/video_core/vulkan_common/vulkan_memory_allocator.h
++++ b/src/video_core/vulkan_common/vulkan_memory_allocator.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <atomic>
++#include <functional>
+ #include <memory>
+ #include <mutex>
+ #include <span>
+@@ -133,6 +134,17 @@
+             return pressure_events.load(std::memory_order_relaxed);
+         }
+ 
++        /// Called when an allocation finds no memory, before it gives up: frees what a cache
++        /// holds only for a while (temporary images, idle staging buffers) and returns true
++        /// when it freed something, so the allocation is tried again.
++        void SetMemoryRelief(std::function<bool()> relief) {
++            memory_relief = std::move(relief);
++        }
++
++        bool RelieveMemory() const {
++            return memory_relief && memory_relief();
++        }
++
+         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage) const;
+ 
+         vk::Buffer CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsage usage,
+@@ -169,6 +181,7 @@
+         VkDeviceSize buffer_image_granularity;            ///< Adjacent buffer/image granularity
+         u32 valid_memory_types{~0u};
+         mutable std::atomic<u32> pressure_events{0};
++        std::function<bool()> memory_relief;
+         mutable std::mutex buffer_type_mutex;
+         /// Memory type of device-local buffers by usage and flags (CreateBufferInSeparatePool).
+         mutable std::unordered_map<u64, u32> buffer_memory_types;
+--- a/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
++++ b/src/video_core/vulkan_common/vulkan_memory_allocator.cpp
+@@ -235,6 +235,9 @@
+     const bool huge = texels > (u64{1} << 28);
+     VkResult result = huge ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+                            : vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
++    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge && RelieveMemory()) {
++        result = vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
++    }
+     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !huge) {
+         // Over the device memory budget (Switch 2 titles fill 8 GB cards): let the driver page
+         // it out rather than failing the draw and aborting.
+@@ -436,8 +439,8 @@
+     if (!CreateBufferInSeparatePool(ci, usage, alloc_ci, handle, allocation, alloc_info)) {
+         vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
+         if (alloc_info.size >= (VkDeviceSize{8} << 20)) {
+-            LOG_INFO(Render_Vulkan, "EDEN_BIG_ALLOC buffer {} MiB usage {:#x}", alloc_info.size >> 20,
+-                     static_cast<u32>(ci.usage));
++            LOG_INFO(Render_Vulkan, "EDEN_BIG_ALLOC buffer {} MiB usage {:#x} memory {}", alloc_info.size >> 20,
++                     static_cast<u32>(ci.usage), static_cast<int>(usage));
+         }
+     }
+     vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
+--- a/src/video_core/renderer_vulkan/vk_staging_buffer_pool.h
++++ b/src/video_core/renderer_vulkan/vk_staging_buffer_pool.h
+@@ -47,6 +47,20 @@
+ 
+     void TickFrame();
+ 
++    /// Deletes staging buffers of 2^min_log2 bytes or more that the GPU is done with and that
++    /// were last handed out before before_tick, keeping keep_per_level of each size for reuse.
++    /// Buffers handed out at before_tick or later stay: their holder may still record with them.
++    /// Returns the bytes freed.
++    u64 TrimIdle(u64 before_tick, u32 min_log2, size_t keep_per_level);
++
++    /// The bytes TrimIdle(before_tick, min_log2, 0) could free once the GPU is past before_tick.
++    u64 IdleBytes(u64 before_tick, u32 min_log2) const;
++
++    /// Marks a buffer handed out earlier as used by the commands recorded now: for a holder
++    /// that records with it again after a flush (its tick is the earlier one, and once the GPU
++    /// passes it TrimIdle and reuse took it while the later commands still named it).
++    void Touch(const StagingBufferRef& ref);
++
+ private:
+     struct StreamBufferCommit {
+         size_t upper_bound;
+--- a/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
++++ b/src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp
+@@ -139,6 +139,69 @@
+     ReleaseCache(MemoryUsage::DeviceLocal);
+     ReleaseCache(MemoryUsage::Upload);
+     ReleaseCache(MemoryUsage::Download);
++    // ReleaseCache visits one size a frame, so a size waits 64 frames to be trimmed, and a
++    // scene load ends no frame: Ocarina of Time's first scene kept ~600 MiB of staging
++    // buffers of 8 MiB and more on the PS5, whose GPU shares the CPU's memory. Keep one of
++    // each large size.
++    TrimIdle(scheduler.CurrentTick(), 23, 1);
++}
++
++u64 StagingBufferPool::TrimIdle(u64 before_tick, u32 min_log2, size_t keep_per_level) {
++    u64 freed = 0;
++    for (StagingBuffersCache* cache : {&device_local_cache, &upload_cache, &download_cache}) {
++        for (size_t log2 = min_log2; log2 < NUM_LEVELS; ++log2) {
++            StagingBuffers& level = (*cache)[log2];
++            if (level.entries.size() <= keep_per_level) {
++                continue;
++            }
++            size_t kept = 0;
++            const size_t old_size = level.entries.size();
++            std::erase_if(level.entries, [&](const StagingBuffer& entry) {
++                if (entry.deferred || entry.tick >= before_tick || !scheduler.IsFree(entry.tick)) {
++                    return false;
++                }
++                if (kept < keep_per_level) {
++                    ++kept;
++                    return false;
++                }
++                freed += u64{1} << log2;
++                return true;
++            });
++            if (level.entries.size() != old_size) {
++                level.delete_index = 0;
++                level.iterate_index = 0;
++            }
++        }
++    }
++    return freed;
++}
++
++void StagingBufferPool::Touch(const StagingBufferRef& ref) {
++    if (ref.log2_level >= NUM_LEVELS) {
++        return;
++    }
++    for (StagingBuffer& entry : GetCache(ref.usage)[ref.log2_level].entries) {
++        if (entry.index == ref.index && *entry.buffer == ref.buffer) {
++            if (!entry.deferred) {
++                entry.tick = (std::max)(entry.tick, scheduler.CurrentTick());
++            }
++            return;
++        }
++    }
++}
++
++u64 StagingBufferPool::IdleBytes(u64 before_tick, u32 min_log2) const {
++    u64 bytes = 0;
++    for (const StagingBuffersCache* cache : {&device_local_cache, &upload_cache, &download_cache}) {
++        for (size_t log2 = min_log2; log2 < NUM_LEVELS; ++log2) {
++            for (const StagingBuffer& entry : (*cache)[log2].entries) {
++                if (!entry.deferred && entry.tick < before_tick) {
++                    bytes += u64{1} << log2;
++                }
++            }
++        }
++    }
++    return bytes;
+ }
+ 
+ StagingBufferRef StagingBufferPool::GetStreamBuffer(size_t size) {
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.h
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.h
+@@ -6,11 +6,13 @@
+ 
+ #pragma once
+ 
++#include <atomic>
+ #include <chrono>
+ #include <deque>
+ #include <memory>
+ #include <optional>
+ #include <span>
++#include <thread>
+ 
+ #include "video_core/texture_cache/texture_cache_base.h"
+ 
+@@ -97,6 +99,8 @@
+ 
+     void FlushDeferredClear();
+ 
++    ~TextureCacheRuntime();
++
+     u64 GetDeviceLocalMemory() const;
+ 
+     u64 GetDeviceMemoryUsage() const;
+@@ -301,6 +305,13 @@
+     std::deque<PendingTranscode> pending_transcodes;
+     /// Decode images the GPU is done with, for the next texture of the same shape.
+     std::vector<PendingTranscode> free_transcodes;
++    /// MemoryAllocator relief: frees the transcode images and idle staging buffers the GPU is
++    /// done with. Only on the thread that transcodes (relief_thread), which owns those lists.
++    bool RelieveMemory();
++    std::atomic<std::thread::id> relief_thread{};
++    /// Set while a transcode runs: a wait inside it makes its texture data's staging buffer
++    /// look idle, so the relief leaves staging alone then.
++    bool transcoding = false;
+ 
+     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
+     const Settings::ResolutionScalingInfo& resolution;
+--- a/src/video_core/renderer_vulkan/vk_texture_cache.cpp
++++ b/src/video_core/renderer_vulkan/vk_texture_cache.cpp
+@@ -1223,6 +1223,7 @@
+       render_pass_cache{render_pass_cache_}, descriptor_pool{descriptor_pool_},
+       compute_pass_descriptor_queue{compute_pass_descriptor_queue_},
+       resolution{Settings::values.resolution_info} {
++    memory_allocator.SetMemoryRelief([this] { return RelieveMemory(); });
+     // Before anything below reads astc_recompression (passes, view formats).
+     UseBc3ForSwitch2OnSmallCards(device);
+     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
+@@ -1264,6 +1265,54 @@
+     scheduler.Finish();
+ }
+ 
++TextureCacheRuntime::~TextureCacheRuntime() {
++    memory_allocator.SetMemoryRelief({});
++}
++
++bool TextureCacheRuntime::RelieveMemory() {
++    // Not from another thread (these lists are the transcoding thread's), and not from inside
++    // itself. It never submits: the caller may be between recording a draw's bindings and the
++    // draw. It waits for the work already submitted, and frees what only that work used.
++    static thread_local bool relieving = false;
++    if (relieving || relief_thread.load(std::memory_order_relaxed) != std::this_thread::get_id()) {
++        return false;
++    }
++    const u64 current = scheduler.CurrentTick();
++    const bool images = !free_transcodes.empty() ||
++                        (!pending_transcodes.empty() && pending_transcodes.front().tick < current);
++    const u64 staging = transcoding ? 0 : staging_buffer_pool.IdleBytes(current, 20);
++    if (!images && staging == 0) {
++        return false;
++    }
++    relieving = true;
++    if (current > 1) {
++        scheduler.Wait(current - 1);
++    }
++    const auto decode_bytes = [](const PendingTranscode& t) {
++        u64 bytes = 0;
++        for (u32 level = 0; level < t.levels; ++level) {
++            bytes += u64{(std::max)(t.width >> level, 1U)} * (std::max)(t.height >> level, 1U) * 4;
++        }
++        return bytes * t.layers;
++    };
++    u64 freed = 0;
++    for (const PendingTranscode& t : free_transcodes) {
++        freed += decode_bytes(t);
++    }
++    free_transcodes.clear();
++    while (!pending_transcodes.empty() && pending_transcodes.front().tick < current) {
++        freed += decode_bytes(pending_transcodes.front());
++        pending_transcodes.pop_front();
++    }
++    if (!transcoding) {
++        freed += staging_buffer_pool.TrimIdle(current, 20, 0);
++    }
++    relieving = false;
++    LOG_WARNING(Render_Vulkan, "Out of graphics memory: freed {} MiB of transcode images and staging buffers",
++                freed >> 20);
++    return freed != 0;
++}
++
+ StagingBufferRef TextureCacheRuntime::UploadStagingBuffer(size_t size, bool deferred) {
+     return staging_buffer_pool.Request(size, MemoryUsage::Upload, deferred);
+ }
+@@ -2846,7 +2895,7 @@
+     }
+     static constexpr u32 MAX_UNUSED_SCRATCH_FRAMES = 60;
+     // Finished decode images wait for the next texture of their shape, up to this much memory.
+-    static constexpr u64 MaxFreeTranscodeBytes = u64{256} << 20;
++    static constexpr u64 MaxFreeTranscodeBytes = u64{64} << 20;
+     const auto decode_bytes = [](const PendingTranscode& t) {
+         u64 bytes{};
+         for (u32 level = 0; level < t.levels; ++level) {
+@@ -4988,18 +5037,77 @@
+     constexpr u64 GroupBytes = u64{64} << 20;
+     const u32 group_layers = static_cast<u32>(
+         std::clamp<u64>(GroupBytes / (std::max)(layer_bytes, u64{1}), 1, layers));
++    relief_thread.store(std::this_thread::get_id(), std::memory_order_relaxed);
++    transcoding = true;
++    struct TranscodingGuard {
++        bool& flag;
++        ~TranscodingGuard() {
++            flag = false;
++        }
++    } transcoding_guard{transcoding};
++    const bool bc3 = !IsOpaqueBc1Astc(device, info) &&
++                     Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc1;
++    const u64 block_bytes = bc3 ? 16 : 8;
++    u64 total = 0;
++    for (u32 level = 0; level < levels; ++level) {
++        const u32 blocks_x = Common::DivCeil((std::max)(width >> level, 1U), 4U);
++        const u32 blocks_y = Common::DivCeil((std::max)(height >> level, 1U), 4U);
++        total += u64{blocks_x} * blocks_y * layers * block_bytes;
++    }
++    const auto same_shape = [&](const PendingTranscode& t) {
++        return t.width == width && t.height == height && t.levels == levels &&
++               t.layers == group_layers;
++    };
++    // A scene load transcodes dozens of textures before a frame ends, and each decode image and
++    // output buffer stayed alive until the frame did: Ocarina of Time's first scene held ~600 MiB
++    // of decode images and ~600 MiB of staging, and the PS5 (one pool for the CPU and the GPU)
++    // ran out of graphics memory. When this texture's would take what was recorded since the
++    // last wait past the budget, wait for the GPU first, so they are freed or reused instead.
++    // (A wait at 192 MiB, checked before counting this texture, still left ~1 GB of them.)
++    constexpr u64 TranscodeBudget = u64{64} << 20;
++    static u64 recorded_bytes = 0;
++    const u64 decode_needed =
++        std::ranges::any_of(free_transcodes, same_shape) ? 0 : layer_bytes * group_layers;
++    const bool wait = recorded_bytes != 0 && recorded_bytes + decode_needed + total > TranscodeBudget;
++    if (wait) {
++        // Staging handed out from here on (this texture's data among them) may still be used.
++        const u64 cutoff = scheduler.CurrentTick();
++        scheduler.Finish();
++        recorded_bytes = 0;
++        while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {
++            pending_transcodes.front().unused_frames = 0;
++            free_transcodes.push_back(std::move(pending_transcodes.front()));
++            pending_transcodes.pop_front();
++        }
++        staging_buffer_pool.TrimIdle(cutoff, 20, 1);
++    }
+     // A decode image of the same shape the GPU is done with: title 1's title screen decodes
+     // dozens of textures a frame, mostly of a few shapes. Making one took 263 us; from VMA's
+     // shared blocks 90 us, but freeing them there left ~1 GB of those blocks unused.
+-    const auto reusable = std::ranges::find_if(free_transcodes, [&](const PendingTranscode& t) {
+-        return t.width == width && t.height == height && t.levels == levels &&
+-               t.layers == group_layers;
+-    });
++    const auto reusable = std::ranges::find_if(free_transcodes, same_shape);
++    const bool reuse = reusable != free_transcodes.end();
+     PendingTranscode pending;
+-    if (reusable != free_transcodes.end()) {
++    if (reuse) {
+         pending = std::move(*reusable);
+         free_transcodes.erase(reusable);
+-    } else {
++    }
++    if (wait) {
++        // Keep at most 32 MiB of the others for reuse, the smallest first.
++        const auto bytes_of = [](const PendingTranscode& t) {
++            u64 bytes = 0;
++            for (u32 level = 0; level < t.levels; ++level) {
++                bytes += u64{(std::max)(t.width >> level, 1U)} * (std::max)(t.height >> level, 1U) * 4;
++            }
++            return bytes * t.layers;
++        };
++        std::ranges::sort(free_transcodes, {}, bytes_of);
++        u64 kept = 0;
++        std::erase_if(free_transcodes, [&](const PendingTranscode& t) {
++            kept += bytes_of(t);
++            return kept > (u64{32} << 20);
++        });
++    }
++    if (!reuse) {
+         pending = PendingTranscode{
+             .tick = 0,
+             .image = memory_allocator.CreateImage(VkImageCreateInfo{
+@@ -5026,22 +5134,14 @@
+             .layers = group_layers,
+             .unused_frames = 0,
+         };
++        recorded_bytes += layer_bytes * group_layers;
+         for (u32 level = 0; level < levels; ++level) {
+             pending.views.push_back(
+                 MakeStorageView(device.GetLogical(), level, *pending.image, DecodeFormat));
+         }
+     }
+-
+-    const bool bc3 = !IsOpaqueBc1Astc(device, info) &&
+-                     Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc1;
+-    const u64 block_bytes = bc3 ? 16 : 8;
+-    u64 total = 0;
+-    for (u32 level = 0; level < levels; ++level) {
+-        const u32 blocks_x = Common::DivCeil((std::max)(width >> level, 1U), 4U);
+-        const u32 blocks_y = Common::DivCeil((std::max)(height >> level, 1U), 4U);
+-        total += u64{blocks_x} * blocks_y * layers * block_bytes;
+-    }
+     const auto output = staging_buffer_pool.Request(total, MemoryUsage::DeviceLocal);
++    recorded_bytes += total;
+ 
+     // Each group: decode its layers, then encode every level of them into the output buffer.
+     std::vector<VideoCommon::BufferImageCopy> copies;
+@@ -5098,6 +5198,11 @@
+                                0, barrier);
+     });
+     image.UploadMemory(output.buffer, output.offset, copies);
++    // The decode pass flushed before the last group was encoded and copied: the output was
++    // handed out at the earlier tick, and trimming it as idle once the GPU passed that tick
++    // left the copy naming a deleted buffer (Ocarina of Time, radv_CmdCopyBufferToImage2 on
++    // the Vulkan worker, a NULL buffer object).
++    staging_buffer_pool.Touch(output);
+     pending.tick = scheduler.CurrentTick();
+     pending_transcodes.push_back(std::move(pending));
+ }

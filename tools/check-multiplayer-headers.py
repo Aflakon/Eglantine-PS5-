@@ -14,6 +14,10 @@ active = {line.split(': ', 1)[0] for line in ninja('targets', 'all').splitlines(
 headers = ('network/packet.h', 'network/room_member.h',
            'core/internal_network/sockets.h', 'core/internal_network/socket_proxy.h',
            'core/hle/service/sockets/bsd.h')
+# Newer cores harden socket_proxy.h and bsd.h themselves, so the build derives only what it finds a reason to:
+# a header with no derived copy has one version only, and every object sees that one.
+derived = build / 'headless/multiplayer/socket-headers'
+headers = tuple(h for h in headers if not h.startswith('core/') or (derived / h).exists())
 seen = dict.fromkeys(headers, 0)
 wrong, target = [], None
 for line in ninja('deps').splitlines():
