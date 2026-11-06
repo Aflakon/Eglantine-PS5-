@@ -2136,6 +2136,10 @@ msgid "Testing switches on"
 msgstr ""
 
 #: pe/ui/testing.cpp
+msgid "Texture cache log"
+msgstr ""
+
+#: pe/ui/testing.cpp
 msgid "Texture memory limit"
 msgstr ""
 
@@ -2377,7 +2381,7 @@ msgid "Upscaling networks"
 msgstr ""
 
 #: pe/ui/testing.cpp
-msgid "Upscaling with a neural network, by default where it is known to work (Ocarina of Time, Donkey Kong Bananza). Off: a plain upscale, much faster and softer."
+msgid "Upscaling with a neural network, on by default in Ocarina of Time and Donkey Kong Bananza. Off measures what it costs: faster, but their image breaks (black or purple)."
 msgstr ""
 
 #: eden_services.cpp
@@ -2498,6 +2502,10 @@ msgstr ""
 msgid "Writes to the log, every 10 seconds, where the GPU thread spends its time. A little slower."
 msgstr ""
 
+#: pe/ui/testing.cpp
+msgid "Writes to the log, every 600 frames, the graphics memory in use against the texture cache's limits, and how much of it is textures."
+msgstr ""
+
 #: pe/ui/save_sync.cpp
 msgid "You are asked again next time."
 msgstr ""
@@ -2522,6 +2530,10 @@ msgstr ""
 
 #: pe/ui/save_sync.cpp
 msgid "Your save data is checked against the server's."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "{0} (default)"
 msgstr ""
 
 #. How many settings of a kind this game has of its own; {0} is a number.

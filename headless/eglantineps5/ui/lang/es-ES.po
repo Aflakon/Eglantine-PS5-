@@ -2388,8 +2388,8 @@ msgid "Upscaling networks"
 msgstr "Redes de escalado"
 
 #: pe/ui/testing.cpp, pe/ui/settings.cpp
-msgid "Upscaling with a neural network, by default where it is known to work (Ocarina of Time, Donkey Kong Bananza). Off: a plain upscale, much faster and softer."
-msgstr "Escalado con red neuronal, por defecto donde se sabe que funciona (Ocarina of Time, Donkey Kong Bananza). «No»: escalado simple, mucho más rápido y más suave."
+msgid "Upscaling with a neural network, on by default in Ocarina of Time and Donkey Kong Bananza. Off measures what it costs: faster, but their image breaks (black or purple)."
+msgstr "Escalado con red neuronal, activo por defecto en Ocarina of Time y Donkey Kong Bananza. «No» sirve para medir lo que cuesta: más rápido, pero su imagen se rompe (negra o morada)."
 
 #: pe/ui/testing.cpp, pe/ui/settings.cpp
 msgid "Default"
@@ -2482,3 +2482,15 @@ msgstr "Guardado. EglantinePS5 se cierra ahora: vuelve a abrirla para usar los i
 #: pe/ui/testing.cpp, pe/ui/settings.cpp
 msgid "Apply"
 msgstr "Aplicar"
+
+#: pe/ui/testing.cpp
+msgid "{0} (default)"
+msgstr "{0} (por defecto)"
+
+#: pe/ui/testing.cpp
+msgid "Texture cache log"
+msgstr "Registro de texturas"
+
+#: pe/ui/testing.cpp
+msgid "Writes to the log, every 600 frames, the graphics memory in use against the texture cache's limits, and how much of it is textures."
+msgstr "Escribe en el log, cada 600 fotogramas, la memoria gráfica en uso frente a los límites de la caché de texturas, y cuánta es de texturas."

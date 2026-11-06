@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -50,8 +51,8 @@ struct Switch
 
 constexpr Switch kSwitches[] = {
     {TR("Upscaling networks"),
-     TR("Upscaling with a neural network, by default where it is known to work (Ocarina of Time, "
-        "Donkey Kong Bananza). Off: a plain upscale, much faster and softer."),
+     TR("Upscaling with a neural network, on by default in Ocarina of Time and Donkey Kong Bananza. "
+        "Off measures what it costs: faster, but their image breaks (black or purple)."),
      {"EDEN_NX2_TENSOR", nullptr},
      {{{TR("Default"), {nullptr, nullptr}}, {TR("Off"), {"0", nullptr}}, {TR("Every game"), {"1", nullptr}}}},
      3},
@@ -73,6 +74,12 @@ constexpr Switch kSwitches[] = {
      {"EDEN_NX2_TC_CRITICAL_MIB", "EDEN_NX2_TC_EXPECTED_MIB"},
      {{{TR("Default"), {nullptr, nullptr}}, {"4 GB", {"4096", "3328"}}, {"3 GB", {"3072", "2304"}}, {"2 GB", {"2048", "1280"}}}},
      4},
+    {TR("Texture cache log"),
+     TR("Writes to the log, every 600 frames, the graphics memory in use against the texture "
+        "cache's limits, and how much of it is textures."),
+     {"EDEN_NX2_TC_LOG", nullptr},
+     {{{TR("Off"), {nullptr, nullptr}}, {TR("On"), {"1", nullptr}}}},
+     2},
     {TR("GPU thread profile"),
      TR("Writes to the log, every 10 seconds, where the GPU thread spends its time. A little slower."),
      {"EDEN_NX2_GPU_PROFILE", nullptr},
@@ -295,8 +302,12 @@ void Launcher::draw_testing(Canvas &c, float open)
         list.push_opacity(testing_rows_.row_alpha(row, kRowHeight));
         // A value the menu does not offer shows as it is in the file.
         const std::string *kept = item.variables[0] != nullptr ? file_value(testing_file_, item.variables[0]) : nullptr;
-        const std::string value = chosen >= 0 ? std::string{tr(item.choices[static_cast<std::size_t>(chosen)].name)} :
-                                                fill(tr("Custom ({0})"), {kept != nullptr ? *kept : std::string{"?"}});
+        // The core's default is the first choice: marked where its name does not say so (On, Off).
+        const char *name = chosen >= 0 ? item.choices[static_cast<std::size_t>(chosen)].name : "";
+        const std::string value =
+            chosen < 0 ? fill(tr("Custom ({0})"), {kept != nullptr ? *kept : std::string{"?"}}) :
+            chosen == 0 && std::string_view{name} != "Default" ? fill(tr("{0} (default)"), {std::string{tr(name)}}) :
+                                                                  std::string{tr(name)};
         // Not applied yet: the warning colour. Applied and not the default: lime.
         const Color ink = chosen != saved ? theme::kWarning : chosen != 0 ? theme::kLime : theme::kLimePale;
         const float taken = chooser(c, value, 1296.0f, baseline(top, kRowHeight, theme::kText24),

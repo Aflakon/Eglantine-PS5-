@@ -1,5 +1,5 @@
 diff --git a/src/video_core/gpu_split.cpp b/src/video_core/gpu_split.cpp
-index 562580a29c..bbc67898c3 100644
+index 07ac984222..57a6431093 100644
 --- a/src/video_core/gpu_split.cpp
 +++ b/src/video_core/gpu_split.cpp
 @@ -2,6 +2,7 @@
@@ -47,10 +47,10 @@ index 562580a29c..bbc67898c3 100644
      Publish();
      Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
 +    auto next_report = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-     for (u32 spins = 0;; ++spins) {
-         consumed_cache = consumed.load(std::memory_order_acquire);
-         if (consumed_cache == write_position) {
-@@ -213,6 +222,21 @@ void GpuSplit::Drain() {
+     // Everything consumed is not enough: the back submits deferred work (Scheduler::DeferFlush)
+     // from its idle hook afterwards, and the caller may use the scheduler once this returns.
+     bool hook_asked = false;
+@@ -222,6 +231,21 @@ void GpuSplit::Drain() {
              Pause();
          } else {
              std::this_thread::yield();
@@ -72,3 +72,16 @@ index 562580a29c..bbc67898c3 100644
          }
      }
  }
+diff --git a/src/video_core/gpu_split.h b/src/video_core/gpu_split.h
+index 836c46c795..7280dd2272 100644
+--- a/src/video_core/gpu_split.h
++++ b/src/video_core/gpu_split.h
+@@ -72,7 +72,7 @@ public:
+     void RequestIdleHook() {
+         hook_requested.store(true, std::memory_order_seq_cst);
+         wake.fetch_add(1, std::memory_order_seq_cst);
+-        wake.notify_one();
++        wake.notify_all(); // as in Publish: notify_one can wake another waiter on libc++'s table
+     }
+ 
+     /// Starts the back thread once the split is wanted (EDEN_NX2_SPLIT=1, a Switch 2 title,

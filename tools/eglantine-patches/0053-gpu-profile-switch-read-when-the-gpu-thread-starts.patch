@@ -1,0 +1,46 @@
+diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
+index 540209bad5..3a6ec7f42d 100644
+--- a/src/video_core/gpu_thread.cpp
++++ b/src/video_core/gpu_thread.cpp
+@@ -53,6 +53,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+         Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
+         Common::SetCurrentThreadToPerformanceCores();
+         system.RegisterHostThread();
++        // Before any zone: the switch may have been set after startup (nx2_profile.h).
++        VideoCommon::Nx2Profile::ReadSwitch();
+ 
+         auto current_context = context.Acquire();
+         CommandDataContainer next;
+diff --git a/src/video_core/nx2_profile.h b/src/video_core/nx2_profile.h
+index a921b72082..3492689481 100644
+--- a/src/video_core/nx2_profile.h
++++ b/src/video_core/nx2_profile.h
+@@ -4,6 +4,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
+ #include <chrono>
+ #include <cstdlib>
+ #include <string>
+@@ -64,11 +65,17 @@ inline constexpr std::array<const char*, static_cast<size_t>(Zone::Count)> zone_
+     "fence skipped", "method", "split drain", "split wait",
+ };
+ 
+-// Read once at startup: Enabled() runs several times per method write (no guard to check).
+-inline const bool g_enabled = std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr;
++// Read at startup and again when the GPU thread starts (ReadSwitch): a frontend may set the
++// variable in main(), after this was made (the PS5 one does, from its testing switches file).
++// Enabled() runs several times per method write: a relaxed load, with no guard to check.
++inline std::atomic<bool> g_enabled{std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr};
++
++inline void ReadSwitch() {
++    g_enabled.store(std::getenv("EDEN_NX2_GPU_PROFILE") != nullptr, std::memory_order_relaxed);
++}
+ 
+ inline bool Enabled() {
+-    return g_enabled;
++    return g_enabled.load(std::memory_order_relaxed);
+ }
+ 
+ // Nanoseconds; from the host's own counter where the wall clock reads it directly (the zones
