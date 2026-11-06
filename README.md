@@ -126,12 +126,28 @@ All changes to the emulator core are plain patches in [`tools/eglantine-patches/
 | 0051 | Ocarina of Time's upscaling networks run through the native HMMA lowering instead of the plain upscale stand-in (its movies were black); `EDEN_NX2_TENSOR=0` turns this off |
 | 0052 | Multiplies by 0 and 1 are folded so Ocarina of Time's sky ambient finds its buffer; pipeline cache versions bumped (Orchid `636c5fb385`) |
 | 0053 | The GPU thread profile (`EDEN_NX2_GPU_PROFILE`) is read again when the GPU thread starts, so the testing switches can turn it on |
+| 0055 | GPU memory layout ranges cached until the page table changes (Jonas, `47b4169b3f`) |
+| 0056 | At fences only the Preflushable parts of a GPU write are copied back, the rest traps reads (Jonas, `5d742e369e`) |
+| 0057 | Switch 2 games: CPU writes onto GPU-written pages go into the buffer instead of copying the page back first, which waited for the GPU; `EDEN_NX2_INLINE_PAGE_WRITES=0` turns it off (Zarigis, `575d0a5bfd`) |
+| 0058 | The split GPU thread's front runs its sync fences, macro DMA read flushes and GPU memory maps on the back thread (kraibse with Duck912 and Zortos, `3087c1cf07`, merged with 0049 and 0050) |
+| 0059 | Deferred work is submitted before waiting on our own fence (kraibse, `1b594aa6b6`) |
+| 0060 | With delayed fence operations, fences are released again while an acquire waits (kraibse, `90ff431884`) |
+| 0061 | GPU data is not copied back over newer CPU writes (Duck912, `fe2cd8be2b`) |
+| 0062 | 4096 continuous range answers kept per thread (Duck912, `292a68df46`) |
+| 0063 | Buffer usage masks for empty and partial blocks (zortos293, `5778922694`) |
+| 0064 | Untouched buffer usage trackers are not reset (zortos293, `1b7995d89c`) |
+| 0065 | Unchanged words are skipped while binding clean buffers (zortos293, `1725659895`) |
+| 0066 | Storage buffer bindings cached per page table serial (Matt Artist, from Frizti/Lichii `ddf7952a14` via Duck912, `c8415d0e80`; adapted to this core's binding sizes) |
+| 0067 | Only compute and DMA methods that write memory count as split writers (Frizti, `dc5938b8bb`) |
+| 0068 | GPU-written page marks batched by bitmap word (zortos293, `abb9ae8426`) |
+| 0069 | The last memory layout interval is reused during draw setup (zortos293, `d713f4462a`) |
+| 0070 | With the GPU thread profile on, the guest thread watchdog writes which GPU thread stopped going round its loop and the zone it stopped in |
 
-Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
+0055-0069 come from Eglantine's branch `oot-optimization-fixes` (Djihads80/Eglantine), not yet in `nx2`; its idle spin commit `8dc1e6e9c4` is left out, because the PS5 frontend already spins about 100 µs before a guest core sleeps, and its front flush commit `727a9a4eb4` is 0050. Number 0006 is intentionally missing: 32 storage buffers per stage is now in the core itself. Frontend changes (NUP in the library, "pack to NUP", `.gitmodules` pointing at Djihads80's core, Vulkan-port anchors for the newest core, per-line log flushing) are ordinary commits on top of the upstream frontend.
 
 Logs on the console: `/data/eglantineps5/user/log/eden_log.txt` (and `.old.txt`), `/data/eglantineps5/logs/`. Settings: `/data/eglantineps5/config/eglantineps5.json`.
 
-**Testing switches:** Settings > Diagnostics > Testing switches changes the emulator's switches (`EDEN_NX2_...`) from the menu: upscaling networks, task and mesh draws, the split GPU thread, the texture memory limit, the texture cache log, the GPU thread profile and others; each shows which of its choices is the default. They are saved to `/data/eglantineps5/config/env.txt` (one `NAME=VALUE` per line, which can also be edited by hand) and apply from the next start, so the app asks to confirm and closes.
+**Testing switches:** Settings > Diagnostics > Testing switches changes the emulator's switches (`EDEN_NX2_...`) from the menu: upscaling networks, task and mesh draws, the split GPU thread, the texture memory limit, the texture cache log, the GPU thread profile, CPU writes on GPU pages and others; each shows which of its choices is the default. They are saved to `/data/eglantineps5/config/env.txt` (one `NAME=VALUE` per line, which can also be edited by hand) and apply from the next start, so the app asks to confirm and closes.
 
 ## Updating and building
 
@@ -210,7 +226,7 @@ Todos los cambios al core del emulador son parches simples en [`tools/eglantine-
 
 Logs en la consola: `/data/eglantineps5/user/log/eden_log.txt` (y `.old.txt`), `/data/eglantineps5/logs/`. Ajustes: `/data/eglantineps5/config/eglantineps5.json`.
 
-**Interruptores de prueba:** Ajustes > Diagnóstico > Interruptores de prueba cambia desde el menú los interruptores del emulador (`EDEN_NX2_...`): redes de escalado, dibujos task y mesh, el hilo de GPU dividido, el límite de memoria de texturas, el registro de texturas, el perfil del hilo de GPU y otros; cada uno indica cuál de sus opciones es la de por defecto. Se guardan en `/data/eglantineps5/config/env.txt` (un `NOMBRE=VALOR` por línea, que también se puede editar a mano) y se aplican desde el siguiente arranque, así que la app pide confirmación y se cierra.
+**Interruptores de prueba:** Ajustes > Diagnóstico > Interruptores de prueba cambia desde el menú los interruptores del emulador (`EDEN_NX2_...`): redes de escalado, dibujos task y mesh, el hilo de GPU dividido, el límite de memoria de texturas, el registro de texturas, el perfil del hilo de GPU, las escrituras de CPU en páginas de GPU y otros; cada uno indica cuál de sus opciones es la de por defecto. Se guardan en `/data/eglantineps5/config/env.txt` (un `NOMBRE=VALOR` por línea, que también se puede editar a mano) y se aplican desde el siguiente arranque, así que la app pide confirmación y se cierra.
 
 ## Actualizar y compilar
 

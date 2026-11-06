@@ -1,0 +1,54 @@
+diff --git a/src/video_core/dma_pusher.cpp b/src/video_core/dma_pusher.cpp
+index c2caf14d7e..aff4f107d2 100644
+--- a/src/video_core/dma_pusher.cpp
++++ b/src/video_core/dma_pusher.cpp
+@@ -256,11 +256,14 @@ bool DmaPusher::Step() {
+     }
+ 
+     if (signal_sync) {
+-        VideoCommon::GpuSplit::Get().Drain();
+-        rasterizer->SignalFence([this]() {
+-            std::scoped_lock lk(sync_mutex);
+-            synced = true;
+-            sync_cv.notify_all();
++        // SignalFence invalidates the GPU caches, which can record copies into the scheduler: the
++        // back's state, which a drained back still submits from in its idle hook.
++        VideoCommon::GpuSplit::Get().RunOnBack([this] {
++            rasterizer->SignalFence([this]() {
++                std::scoped_lock lk(sync_mutex);
++                synced = true;
++                sync_cv.notify_all();
++            });
+         });
+     }
+ 
+diff --git a/src/video_core/engines/maxwell_3d.cpp b/src/video_core/engines/maxwell_3d.cpp
+index bff0787bc9..7663ce384d 100644
+--- a/src/video_core/engines/maxwell_3d.cpp
++++ b/src/video_core/engines/maxwell_3d.cpp
+@@ -1164,7 +1164,9 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
+         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
+     }
+     if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
+-        memory_manager.FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
++        split.RunOnBack([memory = &memory_manager, source, read_bytes] {
++            memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::BufferCache);
++        });
+     }
+     for (u32 i = 0; i < words; ++i) {
+         const u32 word = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
+diff --git a/src/video_core/gpu_thread.cpp b/src/video_core/gpu_thread.cpp
+index 3a6ec7f42d..403fb3c61f 100644
+--- a/src/video_core/gpu_thread.cpp
++++ b/src/video_core/gpu_thread.cpp
+@@ -107,8 +107,9 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
+                     split.Defer([gpu = &system.GPU()] { gpu->TickWork(); });
+                 } else if (auto* run = std::get_if<RunCommand>(&next.data)) {
+                     if (run->before_later_reads) {
++                        // GPU memory maps unmap caches (UnmapMemory downloads): the back's state.
++                        split.DeferFunction(std::move(run->func));
+                         split.Drain();
+-                        run->func();
+                     } else {
+                         split.DeferFunction(std::move(run->func));
+                     }

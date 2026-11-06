@@ -95,6 +95,12 @@ constexpr Switch kSwitches[] = {
      {"EDEN_NX2_HMMA_NATIVE", nullptr},
      {{{TR("On"), {nullptr, nullptr}}, {TR("Off"), {"0", nullptr}}}},
      2},
+    {TR("CPU writes on GPU pages"),
+     TR("By default (Switch 2 games) the CPU's bytes go straight into the GPU's buffer, without "
+        "first copying the page back, which waited for the GPU. Off: the old copy."),
+     {"EDEN_NX2_INLINE_PAGE_WRITES", nullptr},
+     {{{TR("Default"), {nullptr, nullptr}}, {TR("Off"), {"0", nullptr}}}},
+     2},
     {TR("GPU-only memory"),
      TR("By default it gets pages as they are written. Whole backs it all at once: more memory, and a "
         "test for wrong colours."),

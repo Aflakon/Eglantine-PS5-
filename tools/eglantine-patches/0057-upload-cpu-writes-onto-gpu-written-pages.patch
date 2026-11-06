@@ -1,0 +1,25 @@
+diff --git a/src/video_core/buffer_cache/buffer_cache.h b/src/video_core/buffer_cache/buffer_cache.h
+index f8bc25b5b4..9fdc1fee48 100644
+--- a/src/video_core/buffer_cache/buffer_cache.h
++++ b/src/video_core/buffer_cache/buffer_cache.h
+@@ -200,6 +200,20 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
+     const DAddr page_end = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE);
+     if (keep_page_gpu_data && VideoCommon::GpuSplit::OwnsScheduler() &&
+         gpu_modified_ranges.Intersects(page_begin, page_end - page_begin)) {
++        // Switch 2 titles: upload the CPU's bytes into the buffer instead, as CachedWriteMemory
++        // does, so the page stays GPU-owned and nothing waits for the host GPU.
++        static const int forced = [] {
++            const char* value = std::getenv("EDEN_NX2_INLINE_PAGE_WRITES");
++            return value == nullptr ? -1 : (value[0] == '0' ? 0 : 1);
++        }();
++        const bool inline_writes =
++            forced >= 0 ? forced == 1 : Tegra::g_nx2_ampere.load(std::memory_order_relaxed);
++        if (inline_writes && IsRegionRegistered(device_addr, size)) {
++            tmp_buffer.resize_destructive(size);
++            device_memory.ReadBlockUnsafe(device_addr, tmp_buffer.data(), size);
++            InlineMemoryImplementation(device_addr, size, tmp_buffer);
++            return;
++        }
+         DownloadMemory(page_begin, page_end - page_begin);
+     }
+     memory_tracker.MarkRegionAsCpuModified(device_addr, size);

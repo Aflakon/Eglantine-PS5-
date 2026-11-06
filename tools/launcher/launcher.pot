@@ -217,6 +217,10 @@ msgid "BUTTON MAPPING"
 msgstr ""
 
 #: pe/ui/testing.cpp
+msgid "By default (Switch 2 games) the CPU's bytes go straight into the GPU's buffer, without first copying the page back, which waited for the GPU. Off: the old copy."
+msgstr ""
+
+#: pe/ui/testing.cpp
 msgid "By default it gets pages as they are written. Whole backs it all at once: more memory, and a test for wrong colours."
 msgstr ""
 
@@ -416,6 +420,10 @@ msgstr ""
 
 #: pe/ui/multiplayer.cpp
 msgid "Could not start the connection or save its settings."
+msgstr ""
+
+#: pe/ui/testing.cpp
+msgid "CPU writes on GPU pages"
 msgstr ""
 
 #. The DualSense button labelled CREATE: keep the label if the language's players do.

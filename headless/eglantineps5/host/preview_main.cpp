@@ -540,7 +540,7 @@ void pictures(Stage &s)
     s.wait(0.8f);
     s.shoot("18d-testing");
     // Each switch's text under the list, down to the last one.
-    for (int row = 1; row < 8; ++row)
+    for (int row = 1; row < 10; ++row)
     {
         s.press({Key::down});
         s.wait(0.4f);

@@ -2586,3 +2586,11 @@ msgstr "Registro de texturas"
 #: pe/ui/testing.cpp
 msgid "Writes to the log, every 600 frames, the graphics memory in use against the texture cache's limits, and how much of it is textures."
 msgstr "Escribe en el registro, cada 600 fotogramas, la memoria gráfica en uso frente a los límites de la caché de texturas, y cuánta es de texturas."
+
+#: pe/ui/testing.cpp
+msgid "CPU writes on GPU pages"
+msgstr "Escrituras de CPU en páginas de GPU"
+
+#: pe/ui/testing.cpp
+msgid "By default (Switch 2 games) the CPU's bytes go straight into the GPU's buffer, without first copying the page back, which waited for the GPU. Off: the old copy."
+msgstr "Lo predeterminado (juegos de Switch 2): los bytes de la CPU van directos al búfer de la GPU, sin copiar antes la página, que esperaba a la GPU. «No»: la copia de antes."
