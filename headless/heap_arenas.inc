@@ -473,6 +473,64 @@ static void *eden_heap_owner(const void *address) {
   return atomic_load_explicit(&eden_heap_piece_space[piece], memory_order_acquire);
 }
 
+/* ---- Whole free pages (a measurement, reported as EDEN_HEAP_PAGES) ----
+ * The bytes of the blocks handed out, per 2 MiB page of the range; a block kept in a thread's cache
+ * counts as free. A heap that gives whole free pages back could return the committed pages that hold
+ * none (an idle arena's page among them). This one cannot: Sony's mspaces keep their free lists in
+ * the free memory itself. Asked for before replacing them (Mario Kart World's heap held 1952 MiB with
+ * 1574 MiB of it counted in use). */
+static _Atomic long eden_page_live[EDEN_HEAP_SLOTS];
+
+static void eden_pages_count(const void *address, size_t bytes, int sign) {
+  if (address == NULL || bytes == 0 || !eden_heap_in_range(address))
+    return;
+  uintptr_t at = (uintptr_t)address;
+  const uintptr_t end = at + bytes;
+  while (at < end) {
+    const uintptr_t page_end = (at | (uintptr_t)(EDEN_HEAP_ARENA_SIZE - 1u)) + 1u;
+    const uintptr_t part = (page_end < end ? page_end : end) - at;
+    const uintptr_t slot = eden_heap_slot((const void *)at);
+    if (slot < EDEN_HEAP_SLOTS)
+      atomic_fetch_add_explicit(&eden_page_live[slot], sign > 0 ? (long)part : -(long)part,
+                                memory_order_relaxed);
+    at += part;
+  }
+}
+
+/* The committed pages of the heap's pieces that hold no block in use, those of them that are an
+ * arena's, and the bytes in use in the other pages. */
+void eden_heap_page_usage(size_t *free_pages, size_t *idle_arenas, size_t *live) {
+  size_t pages = 0, arenas = 0;
+  long total = 0;
+  if (atomic_load_explicit(&ps5_heap_state, memory_order_acquire) == 2) {
+    const uintptr_t base = (uintptr_t)ps5_heap_base;
+    const unsigned used = atomic_load_explicit(&eden_heap_pieces_used, memory_order_acquire);
+    for (unsigned piece = 0; piece < used && piece < EDEN_HEAP_PIECES; ++piece) {
+      if (atomic_load_explicit(&eden_heap_piece_state[piece], memory_order_relaxed) != 0)
+        continue;
+      const uintptr_t start = base + ((uintptr_t)piece << EDEN_HEAP_PIECE_SHIFT);
+      const uintptr_t end = start + EDEN_HEAP_PIECE_SIZE;
+      for (uintptr_t page = (start + EDEN_HEAP_ARENA_SIZE - 1u) & ~(uintptr_t)(EDEN_HEAP_ARENA_SIZE - 1u);
+           page + EDEN_HEAP_ARENA_SIZE <= end; page += EDEN_HEAP_ARENA_SIZE) {
+        const uintptr_t slot = eden_heap_slot((const void *)page);
+        if (slot >= EDEN_HEAP_SLOTS)
+          continue;
+        const long bytes = atomic_load_explicit(&eden_page_live[slot], memory_order_relaxed);
+        if (bytes > 0) {
+          total += bytes;
+          continue;
+        }
+        ++pages;
+        if (atomic_load_explicit(&eden_heap_slots[slot], memory_order_relaxed) != NULL)
+          ++arenas;
+      }
+    }
+  }
+  *free_pages = pages << EDEN_HEAP_ARENA_SHIFT;
+  *idle_arenas = arenas << EDEN_HEAP_ARENA_SHIFT;
+  *live = total > 0 ? (size_t)total : 0;
+}
+
 /* ---- the heap's own spaces ---- */
 
 enum { EDEN_HEAP_MALLOC, EDEN_HEAP_CALLOC, EDEN_HEAP_ALIGNED };
@@ -795,7 +853,9 @@ static void *eden_heap_record(void *address, size_t bytes) {
       eden_heap_note_failure(bytes, atomic_load_explicit(&eden_heap_grow_why, memory_order_relaxed));
     return ps5_heap_record_allocation(address, bytes != 0); /* counts the failure */
   }
-  eden_heap_account((long)eden_heap_usable(address), 1);
+  const size_t usable = eden_heap_usable(address);
+  eden_heap_account((long)usable, 1);
+  eden_pages_count(address, usable, 1);
   return address;
 }
 
@@ -915,7 +975,9 @@ static void *eden_tcache_take(size_t bytes) {
   void *block = self->bins[bin];
   self->bins[bin] = ((void **)block)[0];
   self->counts[bin]--;
-  eden_heap_charge(self, (long)((size_t *)block)[1], 1);
+  const size_t usable = ((size_t *)block)[1];
+  eden_heap_charge(self, (long)usable, 1);
+  eden_pages_count(block, usable, 1);
   return block;
 }
 
@@ -1182,7 +1244,10 @@ static void *eden_realloc_inner(void *address, size_t size) {
     void *owner = eden_heap_owner(address);
     void *result = sceLibcMspaceRealloc(owner, address, size);
     if (result) {
-      eden_heap_account((long)sceLibcMspaceMallocUsableSize(result) - (long)before, 0);
+      const size_t after = sceLibcMspaceMallocUsableSize(result);
+      eden_heap_account((long)after - (long)before, 0);
+      eden_pages_count(address, before, -1);
+      eden_pages_count(result, after, 1);
       return result;
     }
     if (size == 0) {
@@ -1200,11 +1265,15 @@ static void *eden_realloc_inner(void *address, size_t size) {
     return NULL;
   }
   memcpy(moved, address, before < size ? before : size);
-  eden_heap_account((long)eden_heap_usable(moved) - (long)before, 0);
-  if (large >= 0)
+  const size_t after = eden_heap_usable(moved);
+  eden_heap_account((long)after - (long)before, 0);
+  eden_pages_count(moved, after, 1);
+  if (large >= 0) {
     eden_heap_large_free(large);
-  else
+  } else {
+    eden_pages_count(address, before, -1);
     eden_heap_free_owned(address);
+  }
   return moved;
 }
 
@@ -1222,6 +1291,7 @@ void __wrap_free(void *address) {
   if (eden_heap_in_range(address)) {
     const size_t usable = sceLibcMspaceMallocUsableSize(address);
     eden_site_free(address, usable);
+    eden_pages_count(address, usable, -1);
     if (eden_tcache_keep(address, usable))
       return;
     eden_heap_account(-(long)usable, -1);

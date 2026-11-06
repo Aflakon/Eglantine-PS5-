@@ -388,6 +388,8 @@ extern "C" std::size_t eden_heap_large_held(unsigned* blocks) __attribute__((wea
 extern "C" std::size_t eden_heap_trim(void) __attribute__((weak));
 extern "C" void eden_heap_sites_report(void) __attribute__((weak));
 extern "C" void eden_heap_usage(std::size_t* held, std::size_t* in_use, std::size_t* returned) __attribute__((weak));
+extern "C" void eden_heap_page_usage(std::size_t* free_pages, std::size_t* idle_arenas, std::size_t* live)
+    __attribute__((weak));
 extern "C" unsigned eden_guest_memory_wanted(void) __attribute__((weak));
 extern "C" void eden_guest_memory_reserve(std::size_t* held, std::size_t* target) __attribute__((weak));
 #ifdef PS5_NATIVE
@@ -482,6 +484,14 @@ void ReportHeap(const char* why) {
     std::fprintf(stderr, "[EglantinePS5] heap: holds %zu MiB (%zu MiB of pieces, %zu MiB in %u large blocks), "
                          "%zu MiB of it in use; %zu MiB given back so far (%s)\n",
                  held >> 20, (held - large) >> 20, large >> 20, large_blocks, in_use >> 20, returned >> 20, why);
+    // What a heap that gives whole free 2 MiB pages back could return now (heap_arenas.inc).
+    if (eden_heap_page_usage) {
+        std::size_t free_pages = 0, idle_arenas = 0, live = 0;
+        eden_heap_page_usage(&free_pages, &idle_arenas, &live);
+        std::fprintf(stderr, "EDEN_HEAP_PAGES %zu MiB of the pieces are whole 2 MiB pages with no block in use "
+                             "(%zu MiB of them idle arenas); the blocks in use hold %zu MiB\n",
+                     free_pages >> 20, idle_arenas >> 20, live >> 20);
+    }
     if (eden_heap_sites_report) eden_heap_sites_report();
 }
 
